@@ -199,7 +199,7 @@ config/
   proxies.yml        intentionally empty — this app has no external integrations
 scripts/             Cribl-Community build scripts: package.mjs, pkgutil.mjs, prepare-git-pack.mjs
 .github/workflows/
-  release.yml        tag-triggered release: lint, test, package, publish to the dispensary
+  release.yml        tag-triggered release: lint, test, package, GitHub Release
 APP_DEFINITION.md    the problem statement, workflows, and verified live findings
 APP_BRIEF.md         implementation guide generated from the definition
 CLAUDE.md            the rules an agent working on this app must not break
@@ -210,7 +210,8 @@ README.md
 ## Versioning And Releases
 
 * Semantic versioning, tracked in `package.json`.
-* Releases are triggered by pushing a `v*` tag, which runs `.github/workflows/release.yml`: lint, test, package, GitHub Release, and upload to the Packs Dispensary. Append `-staging` to the tag (`v1.0.2-staging`) to publish to staging only.
+* Releases are triggered by pushing a `v*` tag, which runs `.github/workflows/release.yml`: lint, test, package, commit the pack layout onto the tag for Git installs, and publish a GitHub Release with the `.tgz` attached.
+* **Nothing is published to the Cribl Marketplace.** The template's two dispensary-upload steps are commented out in the workflow, along with a note on how to re-enable them; they need org-level secrets that only exist on `Cribl-Community`. Until then, install from the GitHub Release artifact or from Git.
 
   ```bash
   npm version patch

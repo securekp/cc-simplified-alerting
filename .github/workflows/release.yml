@@ -53,20 +53,35 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
-      - name: Upload pack to Packs Dispensary (staging)
-        if: contains(github.ref_name, '-staging')
-        run: |
-          TGZ_FILE=$(find build -name '*.tgz' | head -1)
-          if [ -z "$TGZ_FILE" ]; then echo "ERROR: No .tgz found in build/"; exit 1; fi
-          curl --fail --location '${{ vars.DISPENSARY_ENDPOINT_STAGING }}/${{ github.event.repository.name }}' \
-            --header 'Authorization: Bearer ${{ secrets.PACKS_API_TOKEN_STAGING }}' \
-            --form "file=@${TGZ_FILE}"
-
-      - name: Upload pack to Packs Dispensary (prod)
-        if: ${{ !contains(github.ref_name, '-staging') }}
-        run: |
-          TGZ_FILE=$(find build -name '*.tgz' | head -1)
-          if [ -z "$TGZ_FILE" ]; then echo "ERROR: No .tgz found in build/"; exit 1; fi
-          curl --fail --location '${{ vars.DISPENSARY_ENDPOINT }}/${{ github.event.repository.name }}' \
-            --header 'Authorization: Bearer ${{ secrets.PACKS_API_TOKEN }}' \
-            --form "file=@${TGZ_FILE}"
+      # --- Marketplace publishing, deliberately disabled -----------------------
+      #
+      # These two steps are the Cribl-Community template's dispensary upload, and they are
+      # commented out on purpose: the release stops at the GitHub Release above, so a `v*` tag
+      # produces a downloadable .tgz and nothing is published to the Cribl Marketplace.
+      #
+      # They depend on org-level secrets and variables (`PACKS_API_TOKEN`, `DISPENSARY_ENDPOINT`,
+      # and the `_STAGING` pair) that exist on the `Cribl-Community` org and nowhere else. Left
+      # enabled outside that org they do not fail safe — `vars.DISPENSARY_ENDPOINT` resolves to an
+      # empty string, so `curl` is handed a bare path and the job fails after the release is
+      # already published, which reads as a broken release rather than an unconfigured one.
+      #
+      # To publish to the Marketplace, uncomment both steps. Nothing else has to change: the
+      # `-staging` tag suffix already routes between the two endpoints.
+      #
+      # - name: Upload pack to Packs Dispensary (staging)
+      #   if: contains(github.ref_name, '-staging')
+      #   run: |
+      #     TGZ_FILE=$(find build -name '*.tgz' | head -1)
+      #     if [ -z "$TGZ_FILE" ]; then echo "ERROR: No .tgz found in build/"; exit 1; fi
+      #     curl --fail --location '${{ vars.DISPENSARY_ENDPOINT_STAGING }}/${{ github.event.repository.name }}' \
+      #       --header 'Authorization: Bearer ${{ secrets.PACKS_API_TOKEN_STAGING }}' \
+      #       --form "file=@${TGZ_FILE}"
+      #
+      # - name: Upload pack to Packs Dispensary (prod)
+      #   if: ${{ !contains(github.ref_name, '-staging') }}
+      #   run: |
+      #     TGZ_FILE=$(find build -name '*.tgz' | head -1)
+      #     if [ -z "$TGZ_FILE" ]; then echo "ERROR: No .tgz found in build/"; exit 1; fi
+      #     curl --fail --location '${{ vars.DISPENSARY_ENDPOINT }}/${{ github.event.repository.name }}' \
+      #       --header 'Authorization: Bearer ${{ secrets.PACKS_API_TOKEN }}' \
+      #       --form "file=@${TGZ_FILE}"
