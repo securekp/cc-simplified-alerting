@@ -1,0 +1,46 @@
+{
+  "name": "cc-simplified-alerting",
+  "private": true,
+  "version": "1.0.1",
+  "description": "Find every Cribl Source and Destination that nothing is watching, and bulk-create the delivery alert for it.",
+  "author": "Kelsey Prior - kprior@cribl.io",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "preview": "vite preview",
+    "prepackage": "npm run build",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@capra/core": "^1.14.0",
+    "@capra/dx-tokens-postcss-plugin": "^0.4.0",
+    "@capra/icons": "^1.10.0",
+    "@capra/theme": "^1.6.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "oxlint": "^1.79.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2"
+  },
+  "displayName": "Simplified Alerting",
+  "cribl": {
+    "type": "app",
+    "createAppScriptVersion": "0.5.0"
+  },
+  "tags": {
+    "product": [
+      "stream"
+    ]
+  }
+}

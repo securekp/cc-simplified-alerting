@@ -1,0 +1,91 @@
+# Product API access declaration.
+#
+# Every path this app calls is listed here, with the narrowest method set that works.
+# The app is an authoring tool: it reads widely to build the coverage table, and writes to
+# exactly two collections — Notifications, and Insights monitors. It never writes Sources,
+# Destinations, pipelines, routes, notification targets, notification policies, or Insights
+# settings, and no such write path is declared.
+#
+# The monitor grant is group-prefixed, because that is the only prefix at which the route
+# exists: `/alert/monitors` 404s at the root and answers under `/m/{gid}/`. An earlier build
+# concluded from a root probe that the route was absent altogether and dropped the grant; a
+# HAR capture of Cribl's own Insights UI showed otherwise.
+#
+# App-scoped KV paths (`/a/{appId}/kvstore/*`) are granted automatically via the AppUser
+# role and are deliberately NOT redeclared here — see AGENTS.md.
+
+policies:
+  # --- Worker groups -------------------------------------------------------
+  # Filtered in app code to `type === 'stream'`; the API returns outpost groups too.
+  - object: '/master/groups'
+    actions: ['GET']
+
+  # --- Discovery: enabled Sources and Destinations, with health inline -----
+  # `status.health`, `status.metrics`, and (destinations) `status.error` arrive with
+  # these calls, so one request per group per direction fills the whole table.
+  - object: '/m/:gid/system/inputs'
+    actions: ['GET']
+  - object: '/m/:gid/system/outputs'
+    actions: ['GET']
+
+  # --- Health detail, fetched lazily when a health cell is expanded ---------
+  # Adds `healthCounts` across Worker Processes, the error object, and queue status.
+  - object: '/m/:gid/system/status/inputs'
+    actions: ['GET']
+  - object: '/m/:gid/system/status/outputs'
+    actions: ['GET']
+
+  # --- Notification conditions and their JSON Schemas ----------------------
+  # The settings form is generated from these. Condition ids are never hardcoded.
+  # The list response carries each condition's `schema` inline, so there is no per-condition
+  # read and `/conditions/*` is deliberately not granted.
+  - object: '/conditions'
+    actions: ['GET']
+
+  # --- Insights engine health, on the group that hosts the monitors --------
+  # Read before the monitor mechanism is offered: a monitor written where nothing evaluates it
+  # would be an alert that silently never fires. Group-prefixed because that is the only prefix
+  # at which this route answers.
+  #
+  # The metric catalogue (`/system-insights/metrics*`), the settings read
+  # (`/system/settings/insights`) and the history query (`/insights/metrics/query`) were granted
+  # for the throughput sparkline. That column is gone — real-time throughput is what Cribl
+  # Insights itself is for — so the grants are gone with it. No alert ever depended on a metric
+  # name, which is why nothing else changes.
+  - object: '/m/:gid/system-insights/healthcheck'
+    actions: ['GET']
+
+  # --- Existing alerts: read for coverage, write to create -----------------
+  # POST covers both mechanisms: a Notification on a discovered condition, and the
+  # `monitor-{id}` bridge that routes a monitor. The collection path is the whole grant:
+  # coverage and the configuration view both read the stored object out of this list, and
+  # the app never edits or deletes a Notification — so no item path is declared at all.
+  - object: '/notifications'
+    actions: ['GET', 'POST']
+
+  # --- Notification routing (read only) ------------------------------------
+  # The three objects an alert can be delivered with, none of which this app creates or edits.
+  # The admin chooses between a policy and a target-plus-template per run, so all three are read:
+  # targets and templates to offer them (a template is paired with a target of the same `type`),
+  # policies only to count them — a policy-routed alert on a deployment with no policy delivers
+  # nothing, and that is worth saying before anything is written.
+  #
+  # Neither `/notification-templates` nor `/notification-policies` appears in `openapi.json`;
+  # both answered 200 live (HAR, 2026-09-02), which is the only reason they are declared.
+  - object: '/notification-targets'
+    actions: ['GET']
+  - object: '/notification-templates'
+    actions: ['GET']
+  - object: '/notification-policies'
+    actions: ['GET']
+
+  # --- Insights monitors ---------------------------------------------------
+  # The second write. GET to build coverage and to find which group hosts the collection;
+  # POST to create one. The item path gets PATCH and nothing else: it is the recovery when a
+  # POST is rejected because the id exists, never a blind first move, and the configuration
+  # view reads the monitor out of the collection list rather than re-reading it by id.
+  # DELETE is deliberately absent: this app creates alerts and never removes one.
+  - object: '/m/:gid/alert/monitors'
+    actions: ['GET', 'POST']
+  - object: '/m/:gid/alert/monitors/*'
+    actions: ['PATCH']

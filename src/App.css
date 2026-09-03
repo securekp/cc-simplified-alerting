@@ -1,0 +1,326 @@
+/*
+ * Layout only.
+ *
+ * Every colour, space, radius, and border comes from a Capra design token via the
+ * `token()` function (resolved by @capra/dx-tokens-postcss-plugin) so both themes and
+ * any future palette change are handled for us. No raw hex values, and no selectors
+ * against Capra internals — these classes only ever land on plain wrapper elements.
+ */
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.lg');
+  padding: token('spacing.lg');
+  min-height: 100vh;
+  background-color: token('color.background.application');
+}
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  max-width: 90ch;
+}
+
+/* ---- Notices ---- */
+
+.notice-stack {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.sm');
+}
+
+.plain-list {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  margin: 0;
+  padding-left: token('spacing.lg');
+}
+
+/* ---- Header bar ---- */
+
+.header-bar {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.md');
+  padding: token('spacing.md');
+  border: token('border.default');
+  border-radius: token('radius.md');
+  background-color: token('color.background.surface');
+}
+
+.header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: token('spacing.md');
+}
+
+.header-row-filters {
+  align-items: center;
+}
+
+.header-row-summary {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: token('spacing.xs');
+}
+
+/* The urgent count and its "show them" button read as one sentence, so they stay on one line. */
+.header-urgent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: token('spacing.xs');
+}
+
+.header-control {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  min-width: 180px;
+}
+
+.header-control-group {
+  min-width: 260px;
+}
+
+.header-control-search {
+  flex: 1 1 260px;
+}
+
+.header-control-actions {
+  margin-left: auto;
+}
+
+/* ---- Table cells ---- */
+
+.cell-inline {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.xs');
+  flex-wrap: wrap;
+}
+
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.none');
+}
+
+.cell-tags {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: token('spacing.xs');
+}
+
+.popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  min-width: 220px;
+}
+
+/* ---- Direction sections ---- */
+
+/*
+ * Sources and Destinations get their own table under their own heading. The gap between
+ * sections is deliberately larger than any gap inside one, because that spacing is what
+ * makes the split readable without reading a word.
+ */
+.coverage-sections {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xl');
+}
+
+.coverage-section {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.sm');
+}
+
+.coverage-section-head {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.sm');
+  flex-wrap: wrap;
+}
+
+/* ---- Actions ---- */
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.sm');
+  flex-wrap: wrap;
+}
+
+/*
+ * Sticky, because the admin selects rows at the top of a long table and the apply
+ * action has to stay reachable without scrolling back.
+ */
+.action-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: token('spacing.md');
+  padding: token('spacing.md');
+  border: token('border.default');
+  border-radius: token('radius.md');
+  background-color: token('color.background.panel.solid');
+}
+
+/* ---- Drawer ---- */
+
+.drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.md');
+}
+
+.drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.sm');
+}
+
+.drawer-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.md');
+  padding-left: token('spacing.lg');
+}
+
+.drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: token('spacing.sm');
+}
+
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.md');
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+/* ---- Preview ---- */
+
+.preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+  padding: token('spacing.sm');
+  border: token('border.default');
+  border-radius: token('radius.md');
+  background-color: token('color.background.surface');
+}
+
+/*
+ * The exact payload, shown verbatim. The preview promises the admin the real condition and
+ * settings that will be POSTed, so it is never summarised or reformatted for looks.
+ */
+.payload {
+  font: token('typography.code');
+  margin: 0;
+  padding: token('spacing.sm');
+  border-radius: token('radius.md');
+  background-color: token('color.background.neutral.subtle');
+  color: token('color.foreground.default');
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ---- Alert chips and the configuration view ---- */
+
+/*
+ * An alert in the coverage cell is a button, because clicking it opens its configuration.
+ * The button itself is stripped back to nothing so the Capra `Tag` inside keeps its own
+ * look — the affordance comes from the cursor and the focus ring, not from a second border.
+ */
+.alert-chip {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: token('radius.md');
+  text-align: left;
+}
+
+.alert-chip:focus-visible {
+  outline: token('border.focus');
+  outline-offset: 2px;
+}
+
+.config-view {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.md');
+}
+
+.config-tags {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.xs');
+  flex-wrap: wrap;
+}
+
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.sm');
+  margin: 0;
+}
+
+/*
+ * Label above value rather than side by side: a `conf` field's own description is often a
+ * full sentence, and a two-column layout squeezed both into unreadable columns.
+ */
+.config-row {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
+
+/*
+ * Where to go in Cribl to edit this alert. The destination used to be an inline link inside the
+ * subtle micro-copy, where it did not read as clickable at all — this app never edits an alert, so
+ * the way out to Cribl is the one action the screen offers and it gets button weight.
+ */
+.config-links {
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.sm');
+}
+
+.config-link-row {
+  display: flex;
+  align-items: center;
+  gap: token('spacing.sm');
+  flex-wrap: wrap;
+}
+
+.config-row dt,
+.config-row dd {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: token('spacing.xs');
+}
