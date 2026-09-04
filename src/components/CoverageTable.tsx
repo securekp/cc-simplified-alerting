@@ -17,20 +17,56 @@ export interface CoverageTableProps {
   onOpenAlert: (alert: AttributedAlert) => void;
 }
 
-const SORTABLE = new Set(['name', 'group', 'health', 'priority']);
+const SORTABLE = new Set(['name', 'group', 'pack', 'health', 'priority']);
+
+interface Section {
+  key: string;
+  direction: Direction;
+  /** Whether this section holds the feeds that live inside a Pack. */
+  inPack: boolean;
+  title: string;
+  label: string;
+  note?: string;
+}
 
 /**
- * Sources and Destinations are shown as two separate tables under their own headings.
+ * Four tables, each under its own heading: direction first, then scope.
  *
- * They read as one list only if you notice a small subtitle on every row, and the two
- * directions are not interchangeable here: they have different health semantics, a
- * different metric, and — because the condition catalogue is asymmetric — a different
- * condition proving the same thing. Which one you are looking at should never be
- * something you have to squint for.
+ * Direction has to be the heading rather than a column. The two are not interchangeable here —
+ * different health semantics, a different metric, and, because the condition catalogue is
+ * asymmetric, a different condition proving the same thing — and which one you are looking at
+ * should never be something you squint for.
+ *
+ * Scope is a heading too rather than just a column. Not because the mechanism differs — it no
+ * longer does, a Pack feed takes whichever one the admin picked — but because a Pack is a separate
+ * collection an admin reasons about separately, so each scope deserves its own "N unwatched" count,
+ * and because a `Pack` column would be blank in every group-level row.
  */
-const SECTIONS: { direction: Direction; title: string; label: string }[] = [
-  { direction: 'source', title: 'Sources', label: 'Source alert coverage' },
-  { direction: 'destination', title: 'Destinations', label: 'Destination alert coverage' },
+const SECTIONS: Section[] = [
+  { key: 'source', direction: 'source', inPack: false, title: 'Sources', label: 'Source alert coverage' },
+  {
+    key: 'destination',
+    direction: 'destination',
+    inPack: false,
+    title: 'Destinations',
+    label: 'Destination alert coverage',
+  },
+  {
+    key: 'source-pack',
+    direction: 'source',
+    inPack: true,
+    title: 'Sources in Packs',
+    label: 'Pack Source alert coverage',
+    note: 'Same alerting options as the group-level feeds; the alert is written into the Pack.',
+  },
+  {
+    key: 'destination-pack',
+    direction: 'destination',
+    inPack: true,
+    title: 'Destinations in Packs',
+    label: 'Pack Destination alert coverage',
+    note: 'Same alerting options as the group-level feeds; the alert is written into the Pack.',
+  },
 ];
 
 export function CoverageTable(props: CoverageTableProps) {
@@ -72,6 +108,8 @@ export function CoverageTable(props: CoverageTableProps) {
           ),
         },
         { id: 'group', label: 'Worker group', allowsSorting: true },
+        // Only ever shown in the two Pack sections, where it is never blank.
+        { id: 'pack', label: 'Pack', allowsSorting: true },
         {
           id: 'health',
           label: 'Health',
@@ -123,7 +161,9 @@ export function CoverageTable(props: CoverageTableProps) {
   const sections = useMemo(
     () =>
       SECTIONS.map((section) => {
-        const sectionRows = sorted.filter((row) => row.direction === section.direction);
+        const sectionRows = sorted.filter(
+          (row) => row.direction === section.direction && (row.feed.pack !== null) === section.inPack,
+        );
         return {
           ...section,
           rows: sectionRows,
@@ -148,7 +188,7 @@ export function CoverageTable(props: CoverageTableProps) {
   return (
     <div className="coverage-sections">
       {sections.map((section) => (
-        <section key={section.direction} className="coverage-section">
+        <section key={section.key} className="coverage-section">
           <div className="coverage-section-head">
             <Text variant="body-md-semibold">{section.title}</Text>
             <Pill variant="muted">{String(section.rows.length)}</Pill>
@@ -158,10 +198,19 @@ export function CoverageTable(props: CoverageTableProps) {
               </Pill>
             ) : null}
           </div>
+          {section.note ? (
+            <Text variant="body-xs-normal" color="subtle" as="p">
+              {section.note}
+            </Text>
+          ) : null}
           <Table<CoverageRow>
             items={section.rows}
             columns={columns}
-            visibleColumns={['name', 'group', 'health', 'error', 'alerts']}
+            visibleColumns={
+              section.inPack
+                ? ['name', 'group', 'pack', 'health', 'error', 'alerts']
+                : ['name', 'group', 'health', 'error', 'alerts']
+            }
             density="compact"
             appearance="zebra"
             isLoading={loading}

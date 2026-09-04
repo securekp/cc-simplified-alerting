@@ -40,9 +40,24 @@ export function tagLabelFor(direction: Direction, template?: Monitor): string {
   return fromTemplate ?? (direction === 'source' ? 'input' : 'output');
 }
 
-/** The tag value for a feed: the same `type:id` string the metric join uses. */
+/**
+ * The tag value for a feed.
+ *
+ * Deliberately the very same string the metric join uses, rather than recomposed from `type` and
+ * `id` here. They agreed while every feed was group-level and stopped agreeing the moment Pack
+ * feeds arrived — a Pack feed's dimension value is `type:pack.id` — and two functions that are
+ * supposed to produce the identical tag must not each have their own opinion of it. A tag that
+ * matches no series is a monitor that never fires, and nothing about it looks wrong.
+ *
+ * A Pack feed's Pack-qualified form is verified, not assumed. Read live on 2026-09-03 by splitting
+ * the throughput metrics — the family the shipped queries measure — by `input` and by `output`:
+ * `datagen:cribl-palo-alto-networks.palo_traffic`, `cribl_lake:observeai.observeai-claudeDesktopLake`
+ * and `cribl_search_engine:observeai.observeai-mainSearch` are all present, and **no bare-id series
+ * exists for any of them**. That read also retired the one observation that had suggested a Pack
+ * feed's tag was ambiguous: `cribl_lake:observeai-claudeDesktopLake` is not in the metric store.
+ */
 export function feedTag(feed: Feed): string {
-  return `${feed.type}:${feed.id}`;
+  return feed.metricKey;
 }
 
 /**
@@ -80,17 +95,38 @@ export function templateCandidates(monitors: readonly Monitor[], direction: Dire
  * *different* feeds would share is refused in `plan.ts` instead of silently overwriting.
  */
 export function monitorId(feed: Feed, template: Monitor): string {
-  return monitorIdFor(feed.id, template.id);
+  return monitorIdFor(feed.id, template.id, feed.pack);
 }
 
 /**
- * The same id from the two strings it is actually made of.
+ * The feed half of a monitor id: the Pack and the feed for a Pack feed, the feed alone otherwise.
+ *
+ * A Pack segment is emitted **only** for a Pack feed, so every monitor id already written keeps its
+ * exact spelling — `event_volume_in_rate_ZscalerWeb` — and the registry entries keyed on those ids
+ * keep resolving. It has to be there for a Pack feed, though, for the same reason `alertId` carries
+ * one: two Packs can each hold a Source called `palo_traffic`, and a single id would make the second
+ * write a silent edit of the first monitor.
+ *
+ * Exported because `indexFeedIdentities` keys the collision index on exactly this string. Two
+ * functions with their own opinion of what a monitor id is made of would leave the check looking
+ * for clashes in the wrong bucket.
+ */
+export function monitorIdFeedPart(feedId: string, pack: string | null = null): string {
+  return pack ? `${sanitizeIdPart(pack)}_${sanitizeIdPart(feedId)}` : sanitizeIdPart(feedId);
+}
+
+/**
+ * The same id from the strings it is actually made of.
  *
  * Separate from `monitorId` so the collision check in `plan.ts` can ask what id *another*
  * feed would produce without inventing a `Feed` object to ask with.
  */
-export function monitorIdFor(feedId: string, templateId: string): string {
-  return `${sanitizeIdPart(templateId)}_${sanitizeIdPart(feedId)}`.slice(0, 100);
+export function monitorIdFor(
+  feedId: string,
+  templateId: string,
+  pack: string | null = null,
+): string {
+  return `${sanitizeIdPart(templateId)}_${monitorIdFeedPart(feedId, pack)}`.slice(0, 100);
 }
 
 /**
@@ -183,7 +219,8 @@ export function buildMonitor(feed: Feed, options: MonitorAlertOptions): Monitor 
     // what an admin scans a list by, and `{metric}_{feed}` is what they are scanning for.
     name: monitorId(feed, options.template),
     description:
-      `${APP_MONITOR_MARK} Watches the ${feed.direction} "${feed.id}" in worker ` +
+      `${APP_MONITOR_MARK} Watches the ${feed.direction} "${feed.id}"` +
+      `${feed.pack ? ` in the Pack "${feed.pack}"` : ''} in worker ` +
       `group "${feed.group}" using the query shipped with "${options.template.id}".`,
     // Verbatim. See rule 1 at the top of this file.
     query: options.template.query,

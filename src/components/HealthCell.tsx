@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { IconButton, Pill, Popover, Spinner, Text } from '@capra/core';
 import { ChevronDown } from '@capra/icons';
-import { fetchHealthDetail, type HealthDetail } from '../api/feeds.ts';
+import { fetchHealthDetail, type FeedScope, type HealthDetail } from '../api/feeds.ts';
 import { describeError } from '../api/client.ts';
 import { formatTimestamp } from '../lib/format.ts';
 import type { Direction, Feed, Health } from '../lib/types.ts';
@@ -15,18 +15,20 @@ const APPEARANCE: Record<Health, 'success' | 'warning' | 'danger' | 'default'> =
 };
 
 /**
- * One in-flight fetch per group+direction, shared across every row.
+ * One in-flight fetch per scope+direction, shared across every row.
  *
  * Without this, expanding five rows in a group fires five identical requests for the
- * same list.
+ * same list. The Pack is part of the key because it is part of the collection: a Pack's status
+ * list is a different response, and keying without it would hand a Pack row the group's list —
+ * where its feed is absent — and report "not in the status response" for a feed that is fine.
  */
 const detailCache = new Map<string, Promise<Map<string, HealthDetail>>>();
 
-function loadDetail(group: string, direction: Direction): Promise<Map<string, HealthDetail>> {
-  const key = `${group}|${direction}`;
+function loadDetail(scope: FeedScope, direction: Direction): Promise<Map<string, HealthDetail>> {
+  const key = `${scope.group}|${scope.pack ?? ''}|${direction}`;
   const existing = detailCache.get(key);
   if (existing) return existing;
-  const promise = fetchHealthDetail(group, direction).catch((error: unknown) => {
+  const promise = fetchHealthDetail(scope, direction).catch((error: unknown) => {
     // Do not cache a failure: the admin may retry after fixing permissions.
     detailCache.delete(key);
     throw error;
@@ -49,7 +51,7 @@ export function HealthCell({ feed }: HealthCellProps) {
       if (!open || detail || loading) return;
       setLoading(true);
       setError(null);
-      loadDetail(feed.group, feed.direction)
+      loadDetail({ group: feed.group, pack: feed.pack }, feed.direction)
         .then((byId) => {
           const entry = byId.get(feed.id);
           if (entry) setDetail(entry);
@@ -58,7 +60,7 @@ export function HealthCell({ feed }: HealthCellProps) {
         .catch((cause: unknown) => setError(describeError(cause)))
         .finally(() => setLoading(false));
     },
-    [detail, loading, feed.group, feed.direction, feed.id],
+    [detail, loading, feed.group, feed.pack, feed.direction, feed.id],
   );
 
   const counts = detail ? Object.entries(detail.healthCounts) : [];

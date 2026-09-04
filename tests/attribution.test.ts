@@ -11,6 +11,7 @@ import {
   buildCoverage,
   classifyCondition,
   directionFromCategory,
+  groupScoped,
   indexRegistry,
   ownershipDetail,
   ownershipLabel,
@@ -87,7 +88,7 @@ describe('attributeNotifications', () => {
 
   it('attributes a Notification via conf.name plus the condition category', () => {
     const outcome = attributeNotifications(
-      [{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }],
+      groupScoped([{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }]),
       [dest],
       conditions,
       noRegistry,
@@ -109,7 +110,7 @@ describe('attributeNotifications', () => {
       targets: ['system_notifications'],
       conf: { name: 'out_splunk', timeWindow: '120s' },
     };
-    const outcome = attributeNotifications([raw], [dest], conditions, noRegistry);
+    const outcome = attributeNotifications(groupScoped([raw]), [dest], conditions, noRegistry);
     const alert = outcome.attributed[0];
     assert.equal(alert.conditionId, 'unhealthy-dest');
     assert.equal(alert.conditionName, 'Unhealthy Destination');
@@ -119,7 +120,7 @@ describe('attributeNotifications', () => {
 
   it('reports rather than guesses when conf.name is absent', () => {
     const outcome = attributeNotifications(
-      [{ id: 'n1', condition: 'unhealthy-dest', conf: {} }],
+      groupScoped([{ id: 'n1', condition: 'unhealthy-dest', conf: {} }]),
       [dest],
       conditions,
       noRegistry,
@@ -130,7 +131,7 @@ describe('attributeNotifications', () => {
 
   it('reports rather than guesses when the condition is not in the catalogue', () => {
     const outcome = attributeNotifications(
-      [{ id: 'n1', condition: 'invented-condition', conf: { name: 'out_splunk' } }],
+      groupScoped([{ id: 'n1', condition: 'invented-condition', conf: { name: 'out_splunk' } }]),
       [dest],
       conditions,
       noRegistry,
@@ -144,7 +145,7 @@ describe('attributeNotifications', () => {
     // ambiguous. Counting it toward both would mark two feeds covered by one alert.
     const other = makeFeed({ id: 'out_splunk', type: 'splunk', direction: 'destination', group: 'groupB' });
     const outcome = attributeNotifications(
-      [{ id: 'n1', condition: 'unhealthy-dest', conf: { name: 'out_splunk' } }],
+      groupScoped([{ id: 'n1', condition: 'unhealthy-dest', conf: { name: 'out_splunk' } }]),
       [dest, other],
       conditions,
       noRegistry,
@@ -156,7 +157,7 @@ describe('attributeNotifications', () => {
   it('does not attribute a destination condition to a same-named source', () => {
     const source = makeFeed({ id: 'out_splunk', type: 'splunk', direction: 'source' });
     const outcome = attributeNotifications(
-      [{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }],
+      groupScoped([{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }]),
       [source],
       conditions,
       noRegistry,
@@ -176,7 +177,7 @@ describe('attributeNotifications', () => {
       createdAt: 0,
     };
     const outcome = attributeNotifications(
-      [{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }],
+      groupScoped([{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }]),
       [dest],
       conditions,
       indexRegistry([record]),
@@ -187,7 +188,7 @@ describe('attributeNotifications', () => {
 
   it('carries the disabled flag through, since a disabled alert is not coverage', () => {
     const outcome = attributeNotifications(
-      [
+      groupScoped([
         {
           id: 'n1',
           condition: 'unhealthy-dest',
@@ -195,7 +196,7 @@ describe('attributeNotifications', () => {
           disabled: true,
           conf: { name: 'out_splunk' },
         },
-      ],
+      ]),
       [dest],
       conditions,
       noRegistry,
@@ -208,7 +209,7 @@ describe('attributeNotifications', () => {
     // earlier build, or one whose registry write failed. The id is not user prose, it is a
     // string this app generated, so saying "not created by this app" about it is false.
     const outcome = attributeNotifications(
-      [
+      groupScoped([
         { id: 'ally-default-out_splunk', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } },
         // The pre-refactor id shape, still live on the verification org.
         {
@@ -217,7 +218,7 @@ describe('attributeNotifications', () => {
           group: 'default',
           conf: { name: 'out_splunk' },
         },
-      ],
+      ]),
       [dest],
       conditions,
       noRegistry,
@@ -228,9 +229,66 @@ describe('attributeNotifications', () => {
     );
   });
 
+  it('matches a Pack alert to the Pack’s own feed and not to the group feed of that name', () => {
+    // Scope is part of the identity, not a hint. Without it these two would be ambiguous and
+    // this function's own rule — never guess — would drop coverage the deployment really has.
+    const inPack = makeFeed({
+      id: 'out_splunk',
+      type: 'splunk',
+      direction: 'destination',
+      pack: 'cribl-palo-alto-networks',
+    });
+    const raw = { id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } };
+    const outcome = attributeNotifications(
+      [{ raw, pack: 'cribl-palo-alto-networks' }],
+      [dest, inPack],
+      conditions,
+      noRegistry,
+    );
+    assert.deepEqual(outcome.unattributed, []);
+    assert.equal(outcome.attributed[0].rowId, inPack.rowId);
+    // Carried on the alert, because the object does not hold it: the configuration view needs it
+    // to tell the admin where the alert is edited.
+    assert.equal(outcome.attributed[0].pack, 'cribl-palo-alto-networks');
+  });
+
+  it('never lets a group-level alert reach inside a Pack', () => {
+    const inPack = makeFeed({
+      id: 'out_splunk',
+      type: 'splunk',
+      direction: 'destination',
+      pack: 'cribl-palo-alto-networks',
+    });
+    const outcome = attributeNotifications(
+      groupScoped([{ id: 'n1', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }]),
+      [inPack],
+      conditions,
+      noRegistry,
+    );
+    assert.equal(outcome.attributed.length, 0);
+    assert.match(outcome.unattributed[0].reason, /no enabled destination named "out_splunk"/);
+  });
+
+  it('still refuses to guess between two Packs holding the same feed name', () => {
+    // Same Pack id installed in two groups, one groupless alert. The scope narrows it to the
+    // Pack; it does not say which group, so this is exactly as ambiguous as the group case.
+    const packed = (group: string) =>
+      makeFeed({ id: 'out_splunk', type: 'splunk', direction: 'destination', group, pack: 'p' });
+    const outcome = attributeNotifications(
+      [{ raw: { id: 'n1', condition: 'unhealthy-dest', conf: { name: 'out_splunk' } }, pack: 'p' }],
+      [packed('default'), packed('groupB')],
+      conditions,
+      noRegistry,
+    );
+    assert.equal(outcome.attributed.length, 0);
+    assert.match(outcome.unattributed[0].reason, /in Pack p in 2 groups/);
+  });
+
   it('says ownership is unknown, not foreign, when the registry could not be read', () => {
     const outcome = attributeNotifications(
-      [{ id: 'someone-elses-alert', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } }],
+      groupScoped([
+        { id: 'someone-elses-alert', condition: 'unhealthy-dest', group: 'default', conf: { name: 'out_splunk' } },
+      ]),
       [dest],
       conditions,
       noRegistry,

@@ -13,6 +13,7 @@ It is an **authoring tool**: every alert it writes is an object Cribl itself cre
 * **Primary purpose:** close the gap between "here are my enabled feeds" and "each one is watched," so a deployment is not running with no per-feed alerting at all.
 * **Key capabilities:**
   * A coverage table of every enabled Source and Destination, with health, a separate error indicator, and one column answering "is anything watching this for a delivery stop?"
+  * **Feeds inside Packs, in their own sections.** A Pack's Sources and Destinations have no row in the group-level config call, so a table built from that call alone reads as complete while a Pack feed moving real traffic is missing from it. The `default` and `devnull` Destinations every Pack ships are left out — neither delivers anywhere, so neither can stop delivering.
   * Filters for uncovered, unhealthy, and has-an-error, plus multi-select and "select all uncovered."
   * Bulk create from a template, with a mandatory preview showing the exact payload of every object that will be written.
   * A click-through configuration view for any alert attributed to a feed, built from the object as Cribl stored it.
@@ -32,10 +33,10 @@ It is an **authoring tool**: every alert it writes is an object Cribl itself cre
 ## Before You Install
 
 * **Required deployment:** Cribl Stream with at least one worker group of `type: stream`. Edge fleets and Search/Lake feeds are out of scope.
-* **Required permissions:** a Cribl admin role. The app reads worker groups, inputs, outputs, notification conditions, notifications, notification targets/templates/policies, and Insights monitors; it writes notifications and Insights monitors. Every path is declared in `config/policies.yml`.
+* **Required permissions:** a Cribl admin role. The app reads worker groups, installed Packs, inputs and outputs (at the group level and inside each Pack), notification conditions, notifications, notification targets/templates/policies, and Insights monitors; it writes notifications — at the group level or inside a Pack — and Insights monitors. Every path is declared in `config/policies.yml`.
 * **Required external systems:** none.
 * **Required configuration values:** none. Condition ids, their `conf` schemas, the monitor host group, and the monitor query are all discovered at runtime — nothing is hardcoded and nothing is asked for up front.
-* **Known limits:** Pack-scoped feeds (`type:pack.feedId`) are not covered by the MVP and are called out in the UI rather than silently omitted. The Insights monitor mechanism needs a group whose monitor collection answers and a shipped monitor whose query can be copied; where neither exists, the app falls back to notifications and says so.
+* **Known limits:** the Insights monitor mechanism needs a group whose monitor collection answers and a shipped monitor whose query can be copied; where neither exists, the app falls back to notifications and says so. Feeds inside Packs get the same two mechanisms as group-level feeds — scope changes where the alert is written, not what is available.
 
 ## Installation
 
@@ -104,10 +105,17 @@ Every capability degrades independently and never blanks the page. If notificati
 | GET | `/m/:gid/system/outputs` | Enabled Destinations, with `status.health`, `status.metrics`, and `status.error`. |
 | GET | `/m/:gid/system/status/inputs` | Per-Worker-Process `healthCounts`, fetched lazily when a health cell is expanded. |
 | GET | `/m/:gid/system/status/outputs` | The same, for Destinations. |
+| GET | `/m/:gid/packs` | Installed Packs, filtered to `isDisabled !== true`. A Pack's feeds have no row in the calls above. |
+| GET | `/m/:gid/p/:pack/system/inputs` | Sources defined inside a Pack. Same payload, same health, different collection. |
+| GET | `/m/:gid/p/:pack/system/outputs` | Destinations defined inside a Pack. |
+| GET | `/m/:gid/p/:pack/system/status/inputs` | The lazy `healthCounts` read for a Pack row. |
+| GET | `/m/:gid/p/:pack/system/status/outputs` | The same, for a Pack's Destinations. |
 | GET | `/conditions` | The notification condition catalogue and each condition's `conf` JSON Schema, which generates the settings form. |
 | GET | `/m/:gid/system-insights/healthcheck` | Whether a monitor written to that group would actually be evaluated. Read before the monitor mechanism is offered. |
 | GET | `/notifications` | Existing alerts, for the coverage column and the configuration view. |
 | POST | `/notifications` | Creates a per-feed condition notification, and the bridge that routes a monitor's output. |
+| GET | `/m/:gid/p/:pack/notifications` | A Pack's own alerts. Read per Pack, because which collection an alert came from is the only thing that says which feed it watches. |
+| POST | `/m/:gid/p/:pack/notifications` | Creates a Notification for a feed inside a Pack. A monitor for the same feed needs no Pack path — it goes to the host group's collection, scoped by the Pack-qualified tag. |
 | GET | `/notification-targets` | Target ids, so the admin can route by target. |
 | GET | `/notification-templates` | Message templates, paired with a target of the same `type`. |
 | GET | `/notification-policies` | Counted only. A policy-routed alert on a deployment with no policy delivers nothing, which is worth saying before anything is written. |
@@ -129,7 +137,7 @@ The app makes **no external calls** and holds no third-party secrets.
 
 The app-scoped KV store is the app's only persistence. Browser storage (`localStorage`, `sessionStorage`, `IndexedDB`, cookies) is never used — the app runs in a sandboxed iframe where it is unreliable.
 
-* `cc-simplified-alerting/managed/{notification|monitor}/{id}` — one record per alert the app created, so the coverage column can distinguish "created here" from "unmanaged" without inferring ownership from names. **This is a cache, not the truth**: it is reconciled against the live reads on every load, stale entries are dropped, and unregistered alerts still count toward coverage as unmanaged.
+* `cc-simplified-alerting/managed/{notification|monitor}/{id}` — one record per alert the app created, so the coverage column can distinguish "created here" from "unmanaged" without inferring ownership from names. A notification record also carries the Pack it was written into, so a later load reconciles it against the right collection. **This is a cache, not the truth**: it is reconciled against the live reads on every load, stale entries are dropped, and unregistered alerts still count toward coverage as unmanaged. An entry whose collection could not be read is left alone rather than pruned — an unreadable collection is not evidence the alert is gone.
 * `cc-simplified-alerting/template-defaults` — the last-used mechanism, condition, `conf`, and monitor settings per direction, plus the routing choice. Validated field by field on read; a deleted target or an unusable mechanism falls back rather than being sent.
 
 Data is shared across users of the app, by design. Nothing is stored encrypted because nothing stored is a secret; the email recipient is personal data and is kept only so an admin does not retype it every run. Uninstall behaviour follows the platform's own KV lifecycle — **alerts already created in Cribl are not removed**, since they are Cribl's objects and not the app's.
@@ -143,7 +151,6 @@ Open an issue in the repository for bugs and questions, or contact the author li
 
 ## Known Limitations
 
-* **Pack-scoped feeds are not covered.** They carry real traffic and are named in the UI rather than quietly omitted.
 * **Alerts cannot be edited or deleted from the app.** Tuning an existing alert, drift re-scan, and firing history are all deferred; the app links into Cribl for those.
 * **Coverage is a configuration question, not a firing question.** The app can prove an alert exists, is enabled, and has a route; it cannot prove anyone received it.
 * **Policy routing cannot be confirmed.** The app counts policies but does not read their matchers, so a policy-routed alert is reported as "which policy carries this is decided in Cribl."
@@ -218,6 +225,8 @@ README.md
   git push origin main --follow-tags
   ```
 
+* **`npm run package` bumps the patch version itself** before building the archive, so running it after `npm version` skips a number. Pin it with `npm run package -- --version 1.0.2` when the version is already where you want it.
+
 * Upgrade notes whenever the KV shape, the reserved id namespace, or a written payload changes — all three affect objects already living in a customer's deployment.
 
 ## Contributing
@@ -236,7 +245,7 @@ This app is licensed under the terms in [LICENSE](./LICENSE).
 |---|---|
 | App Name | Simplified Alerting |
 | App ID | cc-simplified-alerting |
-| Version | 1.0.1 |
+| Version | 1.0.2 |
 | Author | Kelsey Prior - kprior@cribl.io |
 | Support Model | community |
 | Support Label | Community-Maintained |

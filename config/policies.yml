@@ -1,10 +1,10 @@
 # Product API access declaration.
 #
 # Every path this app calls is listed here, with the narrowest method set that works.
-# The app is an authoring tool: it reads widely to build the coverage table, and writes to
-# exactly two collections — Notifications, and Insights monitors. It never writes Sources,
-# Destinations, pipelines, routes, notification targets, notification policies, or Insights
-# settings, and no such write path is declared.
+# The app is an authoring tool: it reads widely to build the coverage table, and writes only
+# alerts — Notifications, at the group level or inside a Pack, and Insights monitors. It never
+# writes Sources, Destinations, pipelines, routes, notification targets, notification policies,
+# Insights settings, or a Pack itself, and no such write path is declared.
 #
 # The monitor grant is group-prefixed, because that is the only prefix at which the route
 # exists: `/alert/monitors` 404s at the root and answers under `/m/{gid}/`. An earlier build
@@ -35,6 +35,22 @@ policies:
   - object: '/m/:gid/system/status/outputs'
     actions: ['GET']
 
+  # --- Packs, and the feeds inside them ------------------------------------
+  # A Pack's Sources and Destinations have no row in the group-level calls above; they are only
+  # reachable under `/p/{pack}/`, which is why an earlier build showed a table that read as
+  # complete while a Pack feed moving real traffic was absent from it. Read only — the app never
+  # creates, edits, installs, or removes a Pack.
+  - object: '/m/:gid/packs'
+    actions: ['GET']
+  - object: '/m/:gid/p/:pack/system/inputs'
+    actions: ['GET']
+  - object: '/m/:gid/p/:pack/system/outputs'
+    actions: ['GET']
+  - object: '/m/:gid/p/:pack/system/status/inputs'
+    actions: ['GET']
+  - object: '/m/:gid/p/:pack/system/status/outputs'
+    actions: ['GET']
+
   # --- Notification conditions and their JSON Schemas ----------------------
   # The settings form is generated from these. Condition ids are never hardcoded.
   # The list response carries each condition's `schema` inline, so there is no per-condition
@@ -61,6 +77,17 @@ policies:
   # coverage and the configuration view both read the stored object out of this list, and
   # the app never edits or deletes a Notification — so no item path is declared at all.
   - object: '/notifications'
+    actions: ['GET', 'POST']
+
+  # The same collection inside a Pack: a Pack's feeds are addressable only from inside the Pack,
+  # so a group-level Notification naming one in `conf.name` would name a feed the group does not
+  # have. A Pack feed can equally be watched by an Insights monitor, and that needs no extra grant
+  # here — a monitor is written to the host group's own collection below and scoped to the feed by
+  # its Pack-qualified metric tag, so it is never addressed through a Pack path.
+  #
+  # Read as well as written: which collection an alert came from is the only thing that says
+  # whether it watches a Pack feed or the group feed of the same name. No item path, same as above.
+  - object: '/m/:gid/p/:pack/notifications'
     actions: ['GET', 'POST']
 
   # --- Notification routing (read only) ------------------------------------

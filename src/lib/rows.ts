@@ -9,6 +9,8 @@ export interface CoverageRow {
   feed: Feed;
   name: string;
   group: string;
+  /** The Pack's display name, or `''` for a group-level feed. Sorted and searched as text. */
+  pack: string;
   direction: Direction;
   health: string;
   error: string;
@@ -21,9 +23,20 @@ export interface CoverageRow {
   [key: string]: unknown;
 }
 
+/** `group/pack` — the key a Pack display name is looked up by. Packs are only unique per group. */
+export function packKey(group: string, pack: string): string {
+  return `${group}/${pack}`;
+}
+
+/**
+ * @param packNames Pack display names by `packKey`. Optional, and a miss falls back to the Pack
+ *   id: the id is always right, just less friendly, and a row must never render blank because a
+ *   name lookup came up empty.
+ */
 export function buildRows(
   feeds: readonly Feed[],
   coverage: ReadonlyMap<string, FeedCoverage>,
+  packNames: ReadonlyMap<string, string> = new Map(),
 ): CoverageRow[] {
   return feeds.map((feed) => {
     const entry = coverage.get(feed.rowId);
@@ -32,6 +45,7 @@ export function buildRows(
       feed,
       name: feed.id,
       group: feed.group,
+      pack: feed.pack ? (packNames.get(packKey(feed.group, feed.pack)) ?? feed.pack) : '',
       direction: feed.direction,
       health: feed.health,
       error: feed.errorMessage ?? '',

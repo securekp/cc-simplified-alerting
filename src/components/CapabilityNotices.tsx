@@ -74,11 +74,15 @@ export function CapabilityNotices({ capabilities, notices, perGroupNotes }: Capa
   push('registry', 'This app cannot record which alerts it created', capabilities.registry, 'warning');
 
   for (const note of perGroupNotes) {
+    // The Pack is named because it is a different collection, not a different formatting of the
+    // same one: "Sources in default were skipped" while the group's own Sources are on screen
+    // reads as a contradiction.
+    const scope = note.pack ? `Pack "${note.pack}" in "${note.group}"` : `"${note.group}"`;
     entries.push({
-      key: `group-${note.group}-${note.direction}`,
-      title: `${note.direction === 'source' ? 'Sources' : 'Destinations'} in "${note.group}" were skipped`,
+      key: `group-${note.group}-${note.pack ?? ''}-${note.direction}`,
+      title: `${note.direction === 'source' ? 'Sources' : 'Destinations'} in ${scope} were skipped`,
       appearance: 'warning',
-      body: `${note.message} Other groups loaded normally, so this table is incomplete rather than wrong.`,
+      body: `${note.message} Everything else loaded normally, so this table is incomplete rather than wrong.`,
     });
   }
 

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { emptyCoverage } from '../src/lib/attribution.ts';
-import { buildRows, describeSelection } from '../src/lib/rows.ts';
+import { buildRows, describeSelection, packKey } from '../src/lib/rows.ts';
 import type { FeedCoverage } from '../src/lib/types.ts';
 import { makeAlert, makeFeed } from './fixtures.ts';
 
@@ -36,6 +36,22 @@ describe('buildRows', () => {
     assert.deepEqual(row.alerts, []);
     assert.deepEqual(row.other, []);
     assert.equal(row.error, '');
+  });
+
+  it('labels a Pack row with the name the admin gave the Pack, falling back to its id', () => {
+    const inPack = makeFeed({ id: 'palo_traffic', type: 'datagen', pack: 'cribl-palo-alto-networks' });
+    const unnamed = makeFeed({ id: 'other', type: 'datagen', pack: 'no-name-read' });
+    const rows = buildRows(
+      [inPack, unnamed],
+      new Map(),
+      new Map([[packKey('default', 'cribl-palo-alto-networks'), 'Palo Alto Networks']]),
+    );
+    assert.equal(rows[0].pack, 'Palo Alto Networks');
+    assert.equal(rows[1].pack, 'no-name-read');
+  });
+
+  it('leaves the Pack column empty for a group-level feed rather than inventing a value', () => {
+    assert.equal(buildRows([unwatchedRed], coverage)[0].pack, '');
   });
 });
 

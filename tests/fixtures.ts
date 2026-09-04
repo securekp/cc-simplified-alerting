@@ -13,15 +13,19 @@ import type { AttributedAlert, Direction, Feed, Health, Signal } from '../src/li
 export function makeFeed(overrides: Partial<Feed> & { id: string; type: string }): Feed {
   const direction: Direction = overrides.direction ?? 'source';
   const group = overrides.group ?? 'default';
+  // Threaded into the derived fields rather than only spread on top, so `makeFeed({pack: 'p'})`
+  // produces the `rowId` and `metricKey` a Pack feed really has instead of a group feed's.
+  const pack = overrides.pack ?? null;
   return {
-    rowId: feedRowId(direction, group, overrides.id),
+    ...overrides,
+    rowId: feedRowId(direction, group, overrides.id, pack),
     group,
     direction,
-    metricKey: feedMetricKey(overrides.type, overrides.id),
-    health: 'Green' as Health,
-    healthKnown: true,
-    errorMessage: null,
-    ...overrides,
+    pack,
+    metricKey: overrides.metricKey ?? feedMetricKey(overrides.type, overrides.id, pack),
+    health: overrides.health ?? ('Green' as Health),
+    healthKnown: overrides.healthKnown ?? true,
+    errorMessage: overrides.errorMessage ?? null,
   };
 }
 

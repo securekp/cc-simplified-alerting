@@ -11,13 +11,14 @@
  * either hide half of a monitor write from the preview or lie about its shape.
  */
 
-import { buildNotification, sanitizeIdPart, type NotificationPayload } from './payloads.ts';
+import { buildNotification, type NotificationPayload } from './payloads.ts';
 import {
   buildBridgeNotification,
   buildMonitor,
   defaultMonitorOptions,
   feedTag,
   monitorId,
+  monitorIdFeedPart,
   monitorIdFor,
   type BridgeNotificationPayload,
   type MonitorConditionType,
@@ -204,7 +205,19 @@ export function coerceMonitorSettings(raw: unknown, fallback = DEFAULT_MONITOR_S
  * per-feed scoping happens through the rule tags instead of through the path.
  */
 export type PlannedWrite =
-  | { kind: 'notification'; notification: NotificationPayload }
+  | {
+      kind: 'notification';
+      notification: NotificationPayload;
+      /**
+       * The Pack whose collection this is POSTed to, or `null` for `/notifications`.
+       *
+       * On the write and not just on the feed, because the collection is the only thing that
+       * scopes it: the payload for a Pack feed is byte-identical to a group-level one, so sending
+       * it to the wrong path creates an alert naming a feed that path does not have.
+       */
+      pack: string | null;
+      group: string;
+    }
   | {
       kind: 'monitor';
       hostGroup: string;
@@ -291,6 +304,17 @@ export interface FeedIdentity {
 /**
  * Index every discovered feed under the id segment its monitor id would use.
  *
+ * **Pack feeds are included, and have to be.** They were excluded while a Pack feed could not get a
+ * monitor, because `sanitizeIdPart` saw only the bare id and a Pack Source called `palo_traffic`
+ * would have reported a clash with the group Source of that name — blocking a real monitor over one
+ * the app was never going to write. Now that a Pack feed does get a monitor, the key is the
+ * **pack-aware** feed part, so those two land in different buckets and neither invents a collision,
+ * while two Packs that genuinely do collide are caught.
+ *
+ * Keyed through `monitorIdFeedPart` rather than a local recomposition, so this index and the id it
+ * is checking cannot drift apart: a check looking in the wrong bucket reports no clash and lets the
+ * silent overwrite through.
+ *
  * Groups and identities are deduplicated and sorted so the messages built from them read the
  * same on every render — a warning that reorders itself between renders reads like new
  * information.
@@ -298,7 +322,7 @@ export interface FeedIdentity {
 export function indexFeedIdentities(feeds: readonly Feed[]): Map<string, FeedIdentity[]> {
   const index = new Map<string, FeedIdentity[]>();
   for (const feed of feeds) {
-    const key = sanitizeIdPart(feed.id);
+    const key = monitorIdFeedPart(feed.id, feed.pack);
     const identities = index.get(key) ?? [];
     if (identities.length === 0) index.set(key, identities);
     const existing = identities.find(
@@ -315,6 +339,23 @@ export function indexFeedIdentities(feeds: readonly Feed[]): Map<string, FeedIde
 }
 
 type PlanBase = Pick<PlannedAlert, 'key' | 'rowId' | 'feedId' | 'group' | 'direction' | 'mechanism'>;
+
+/**
+ * Which mechanism can create an alert for this feed.
+ *
+ * Scope is not part of this answer. A Pack feed was notification-only for as long as its metric tag
+ * was unverified — a monitor's per-feed scope is `rules[0].includedTags`, and a tag matching no
+ * series is a monitor that is created successfully, charts an empty line and never fires, so the
+ * standing rule was block rather than improvise. The tag is now verified live (see `feedTag`), the
+ * Pack-qualified form is the only one the throughput metrics carry, and `namespace` turned out not
+ * to be a dimension at all — so the shipped `{namespace=""}` matcher treats both scopes alike.
+ * With nothing left unproven, a Pack feed gets whichever mechanism the admin chose, exactly like a
+ * group feed. The two differences that remain are addressing, not choice: the Notification goes to
+ * the Pack's own collection, and both ids carry a Pack segment.
+ */
+export function mechanismFor(feed: Feed, settings: TemplateSettings): Mechanism {
+  return settings.mechanismBy[feed.direction];
+}
 
 function planNotification(feed: Feed, base: PlanBase, settings: TemplateSettings, context: PlanContext): PlannedAlert {
   const conditionId = settings.conditionBy[feed.direction];
@@ -335,9 +376,13 @@ function planNotification(feed: Feed, base: PlanBase, settings: TemplateSettings
   return {
     ...base,
     signal: classifyCondition(condition),
-    label: `Notification on "${condition.name}" (${condition.id})`,
+    label: feed.pack
+      ? `Notification on "${condition.name}" (${condition.id}) inside Pack "${feed.pack}"`
+      : `Notification on "${condition.name}" (${condition.id})`,
     write: {
       kind: 'notification',
+      pack: feed.pack,
+      group: feed.group,
       notification: buildNotification(feed, {
         conditionId: condition.id,
         // Pruned against *this* condition's schema. Sources and Destinations land on
@@ -364,7 +409,7 @@ function resolveTemplate(
 }
 
 function identitiesFor(feed: Feed, context: PlanContext): readonly FeedIdentity[] {
-  return context.feedIdentities.get(sanitizeIdPart(feed.id)) ?? [];
+  return context.feedIdentities.get(monitorIdFeedPart(feed.id, feed.pack)) ?? [];
 }
 
 /**
@@ -393,7 +438,7 @@ function collisionBlock(
   const clashes = identitiesFor(feed, context).filter((identity) => {
     if (identity.direction === feed.direction && identity.tag === tag) return false;
     const peer = resolveTemplate(identity.direction, settings, context);
-    return peer !== undefined && monitorIdFor(feed.id, peer.id) === mine;
+    return peer !== undefined && monitorIdFor(feed.id, peer.id, feed.pack) === mine;
   });
   if (clashes.length === 0) return undefined;
   const named = clashes
@@ -520,7 +565,7 @@ function planMonitor(feed: Feed, base: PlanBase, settings: TemplateSettings, con
 }
 
 function planItem(feed: Feed, settings: TemplateSettings, context: PlanContext): PlannedAlert {
-  const mechanism = settings.mechanismBy[feed.direction];
+  const mechanism = mechanismFor(feed, settings);
   const base: PlanBase = {
     key: feed.rowId,
     rowId: feed.rowId,

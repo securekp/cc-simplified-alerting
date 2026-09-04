@@ -15,12 +15,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { describeError, mapLimit } from '../api/client.ts';
 import { fetchAllGroupIds, fetchWorkerGroups } from '../api/groups.ts';
-import { fetchFeeds } from '../api/feeds.ts';
+import { fetchFeeds, groupScope, type FeedScope } from '../api/feeds.ts';
+import { fetchPacks } from '../api/packs.ts';
 import { fetchConditions } from '../api/conditions.ts';
 import { fetchInsightsHealth } from '../api/insights.ts';
 import {
   fetchNotificationTargets,
   fetchNotifications,
+  fetchPackNotifications,
   type NotificationTarget,
 } from '../api/alerts.ts';
 import {
@@ -35,8 +37,12 @@ import {
   attributeNotifications,
   buildCoverage,
   classifyCondition,
+  groupScoped,
   staleRegistryEntries,
+  type RawNotification,
+  type ScopedNotification,
 } from '../lib/attribution.ts';
+import { packHasFeeds, type Pack } from '../lib/feeds.ts';
 import { templateCandidates } from '../lib/monitorPayload.ts';
 import type {
   Capability,
@@ -51,10 +57,17 @@ import type {
 import { blocked, CAPABLE } from '../lib/types.ts';
 
 const DIRECTIONS: Direction[] = ['source', 'destination'];
-const GROUP_FETCH_CONCURRENCY = 4;
+/**
+ * Raised from 4 when Packs arrived: the job list is no longer two calls per group but two per
+ * group *plus* two per Pack, and a deployment with a dozen Packs would otherwise serialise the
+ * whole table behind them.
+ */
+const GROUP_FETCH_CONCURRENCY = 6;
 
 export interface GroupFetchNote {
   group: string;
+  /** The Pack whose feeds could not be read, or `null` for the group's own collection. */
+  pack: string | null;
   direction: Direction;
   message: string;
 }
@@ -88,6 +101,13 @@ export interface DiscoveryCapabilities {
 
 export interface DiscoveryData {
   groups: WorkerGroup[];
+  /**
+   * Every enabled Pack found across the groups, for its display name.
+   *
+   * Not a capability and not a filter: the feeds themselves carry their Pack id, so this exists
+   * only so the table can label a row with the name an admin gave the Pack rather than its id.
+   */
+  packs: Pack[];
   feeds: Feed[];
   coverage: Map<string, FeedCoverage>;
   unattributed: UnattributedAlert[];
@@ -145,6 +165,7 @@ export interface DiscoveryState extends DiscoveryData {
 function emptyData(): DiscoveryData {
   return {
     groups: [],
+    packs: [],
     feeds: [],
     coverage: new Map(),
     unattributed: [],
@@ -195,13 +216,54 @@ async function loadAll(signal: AbortSignal): Promise<DiscoveryData> {
     data.notices.push('No Stream worker groups were returned, so there is nothing to alert on yet.');
   }
 
-  // --- Feeds: one call per group per direction, failures isolated per group ---
-  const jobs = data.groups.flatMap((group) =>
-    DIRECTIONS.map((direction) => ({ group: group.id, direction })),
-  );
+  // --- Packs, before feeds, because each one adds two more collections to read ---
+  //
+  // A Pack's Sources and Destinations have **no row** in the group-level `/system/{inputs,outputs}`
+  // call; they are only reachable at `/m/{gid}/p/{pack}/system/…`. That is why an earlier build
+  // showed a table that read as complete while a Pack feed moving 33 MB an hour was absent from
+  // it. Packs are not a fifth capability: a group whose Pack list is denied loses its Pack rows
+  // and nothing else.
+  const packListFailures = new Map<string, string>();
+  const packResults = await mapLimit(data.groups, GROUP_FETCH_CONCURRENCY, async (group) => {
+    try {
+      return { group: group.id, packs: await fetchPacks(group.id, signal) };
+    } catch (error) {
+      return { group: group.id, packs: [] as Pack[], error: describeError(error) };
+    }
+  });
+  for (const result of packResults) {
+    if (result.error) packListFailures.set(result.group, result.error);
+    else data.packs.push(...result.packs);
+  }
+  if (packListFailures.size > 0) {
+    const detail = [...packListFailures]
+      .map(([group, reason]) => `${group} (${reason})`)
+      .join('; ');
+    data.notices.push(
+      `Packs could not be listed in ${detail}, so any Source or Destination inside a Pack there is ` +
+        'missing from the table below. Group-level coverage is unaffected.',
+    );
+  }
+
+  // --- Feeds: one call per scope per direction, failures isolated per scope ---
+  //
+  // A Pack is skipped for a direction only when it **reported** a count of zero — an absent
+  // count means the Pack did not say, and reading that as zero would hide a whole Pack's feeds
+  // on no evidence. See `packHasFeeds`.
+  const jobs: { scope: FeedScope; direction: Direction }[] = [
+    ...data.groups.flatMap((group) =>
+      DIRECTIONS.map((direction) => ({ scope: groupScope(group.id), direction })),
+    ),
+    ...data.packs.flatMap((pack) =>
+      DIRECTIONS.filter((direction) => packHasFeeds(pack, direction)).map((direction) => ({
+        scope: { group: pack.group, pack: pack.id },
+        direction,
+      })),
+    ),
+  ];
   const feedResults = await mapLimit(jobs, GROUP_FETCH_CONCURRENCY, async (job) => {
     try {
-      return { job, feeds: await fetchFeeds(job.group, job.direction, signal) };
+      return { job, feeds: await fetchFeeds(job.scope, job.direction, signal) };
     } catch (error) {
       return { job, feeds: [] as Feed[], error: describeError(error) };
     }
@@ -210,7 +272,8 @@ async function loadAll(signal: AbortSignal): Promise<DiscoveryData> {
     data.feeds.push(...result.feeds);
     if (result.error) {
       data.perGroupNotes.push({
-        group: result.job.group,
+        group: result.job.scope.group,
+        pack: result.job.scope.pack,
         direction: result.job.direction,
         message: result.error,
       });
@@ -330,6 +393,50 @@ async function loadAll(signal: AbortSignal): Promise<DiscoveryData> {
   const notifications = await attempt('Reading existing notifications', () =>
     fetchNotifications(signal),
   );
+
+  // A Pack's alerts live in the Pack's own collection, read one Pack at a time. Not
+  // `includePacks=true` on the group call: a Notification carries a bare `conf.name` and nothing
+  // naming a Pack, so the collection it came from is attribution's only handle on scope, and a
+  // flat merged list would make a Pack alert on `palo_traffic` and a group alert on
+  // `palo_traffic` indistinguishable — reported as ambiguous, and therefore lost.
+  const packAlertFailures = new Map<string, string>();
+  const packNotifications: ScopedNotification[] = [];
+  if (notifications.value) {
+    // Deduplicated against the **group-level** ids only. The Pack-context list accepts a
+    // `groupId` and its own `includePacks`, so it may hand back group-level alerts too. Two
+    // Packs that each hold the same id are both kept: their scope tells them apart, and
+    // dropping one would lose coverage the deployment really has.
+    const groupLevelIds = new Set(
+      notifications.value.flatMap((item) => (typeof item.id === 'string' ? [item.id] : [])),
+    );
+    const results = await mapLimit(data.packs, GROUP_FETCH_CONCURRENCY, async (pack) => {
+      try {
+        return { pack, raw: await fetchPackNotifications(pack.group, pack.id, signal) };
+      } catch (error) {
+        return { pack, raw: [] as RawNotification[], error: describeError(error) };
+      }
+    });
+    for (const result of results) {
+      if (result.error) {
+        packAlertFailures.set(`${result.pack.group}/${result.pack.id}`, result.error);
+        continue;
+      }
+      for (const raw of result.raw) {
+        const id = typeof raw.id === 'string' ? raw.id : null;
+        if (!id || groupLevelIds.has(id)) continue;
+        packNotifications.push({ raw, pack: result.pack.id });
+      }
+    }
+    if (packAlertFailures.size > 0) {
+      data.notices.push(
+        `Existing alerts could not be read inside ${packAlertFailures.size} ` +
+          `${packAlertFailures.size === 1 ? 'Pack' : 'Packs'}, so feeds in ` +
+          `${packAlertFailures.size === 1 ? 'it' : 'them'} may show as unwatched when they are not. ` +
+          `Tried: ${[...packAlertFailures].map(([key, reason]) => `${key} (${reason})`).join('; ')}.`,
+      );
+    }
+  }
+
   const targets = await attempt('Reading notification targets', () => fetchNotificationTargets(signal));
   if (targets.value) data.targets = targets.value;
   data.capabilities.routingTargets = targets.value
@@ -391,13 +498,22 @@ async function loadAll(signal: AbortSignal): Promise<DiscoveryData> {
       notifications.value.flatMap((item) => (typeof item.id === 'string' ? [item.id] : [])),
     );
     for (const monitor of host?.monitors ?? []) live.add(monitor.id);
-    // A monitor entry can only be judged when the monitor collection was actually read. With
-    // no host, every monitor entry would look stale for the same reason it looks invisible,
-    // and the app would delete its own record of a monitor that is still there.
-    const judgeable =
-      host === null
-        ? data.registry.filter((record) => record.settings?.mechanism !== 'monitor')
-        : data.registry;
+    // A Pack alert is not in the group-level list, so without these every Pack entry would be
+    // judged stale and pruned on the very next load.
+    for (const scoped of packNotifications) {
+      if (typeof scoped.raw.id === 'string') live.add(scoped.raw.id);
+    }
+    // An entry can only be judged against a collection that was actually read. Two ways that
+    // fails, and both mean "not judged" rather than "gone": no monitor host answered, or a Pack
+    // whose alerts (or whose very existence) could not be listed. Deleting the app's own record
+    // of an alert that is still there would report it as unmanaged forever after.
+    const judgeable = data.registry.filter((record) => {
+      if (host === null && record.settings?.mechanism === 'monitor') return false;
+      const pack = record.settings?.pack;
+      if (typeof pack !== 'string' || !pack) return true;
+      // A Pack that is genuinely gone *is* judged: its alerts went with it.
+      return !packListFailures.has(record.group) && !packAlertFailures.has(`${record.group}/${pack}`);
+    });
     const stale = staleRegistryEntries(judgeable, live);
     if (stale.length > 0) {
       const staleIds = new Set(stale.map((record) => record.id));
@@ -414,7 +530,9 @@ async function loadAll(signal: AbortSignal): Promise<DiscoveryData> {
   const registryIndex = new Map(data.registry.map((record) => [record.id, record] as const));
   if (notifications.value) {
     const outcome = attributeNotifications(
-      notifications.value,
+      // Each alert paired with the collection it came from, because that is the only thing that
+      // says whether it watches a Pack feed or the group feed of the same name.
+      [...groupScoped(notifications.value), ...packNotifications],
       data.feeds,
       data.conditionsById,
       registryIndex,

@@ -97,7 +97,9 @@ export function matchesFilters(
   if (filters.uncoveredOnly && isCovered(coverage)) return false;
   const search = filters.search.trim().toLowerCase();
   if (search) {
-    const haystack = `${feed.id} ${feed.type} ${feed.group}`.toLowerCase();
+    // The Pack is in the haystack because it is part of how an admin names a feed: with Packs
+    // in the table, "palo" is as likely to mean the Pack as the feed inside it.
+    const haystack = `${feed.id} ${feed.type} ${feed.group} ${feed.pack ?? ''}`.toLowerCase();
     if (!haystack.includes(search)) return false;
   }
   return true;

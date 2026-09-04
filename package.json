@@ -1,7 +1,7 @@
 {
   "name": "cc-simplified-alerting",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Find every Cribl Source and Destination that nothing is watching, and bulk-create the delivery alert for it.",
   "author": "Kelsey Prior - kprior@cribl.io",
   "license": "Apache-2.0",

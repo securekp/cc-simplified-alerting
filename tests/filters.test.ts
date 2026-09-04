@@ -123,6 +123,13 @@ describe('matchesFilters', () => {
     assert.equal(matchesFilters(feed, covered, { ...DEFAULT_FILTERS, search: ' default ' }), true);
     assert.equal(matchesFilters(feed, covered, { ...DEFAULT_FILTERS, search: 'kafka' }), false);
   });
+
+  it('searches the Pack too, because that is part of how an admin names a feed', () => {
+    // With Packs in the table, "palo" is as likely to mean the Pack as the feed inside it.
+    const inPack = makeFeed({ id: 'traffic', type: 'datagen', pack: 'cribl-palo-alto-networks' });
+    assert.equal(matchesFilters(inPack, covered, { ...DEFAULT_FILTERS, search: 'palo' }), true);
+    assert.equal(matchesFilters(feed, covered, { ...DEFAULT_FILTERS, search: 'palo' }), false);
+  });
 });
 
 describe('isTroubled', () => {

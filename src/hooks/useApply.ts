@@ -12,7 +12,12 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { ApiError, describeError } from '../api/client.ts';
-import { createMonitorBridge, createNotification, notificationUrl } from '../api/alerts.ts';
+import {
+  createMonitorBridge,
+  createNotification,
+  createPackNotification,
+  notificationUrl,
+} from '../api/alerts.ts';
 import { monitorUrl, upsertMonitor } from '../api/monitors.ts';
 import { saveRegistryEntry } from '../api/kv.ts';
 import type { PlannedAlert, PlannedWrite } from '../lib/plan.ts';
@@ -62,10 +67,16 @@ interface WriteResult {
 async function performWrite(write: PlannedWrite, signal: AbortSignal): Promise<WriteResult> {
   if (write.kind === 'notification') {
     const payload = write.notification;
-    await createNotification(payload, signal);
+    // The collection is part of the plan, not derived here: the payload for a Pack feed is
+    // byte-identical to a group-level one, so the path is the only thing that decides which
+    // feed the alert actually names.
+    if (write.pack) await createPackNotification(write.group, write.pack, payload, signal);
+    else await createNotification(payload, signal);
     return {
       id: payload.id,
-      message: 'Created.',
+      message: write.pack
+        ? `Created inside the Pack "${write.pack}". It is edited in Cribl from within that Pack, not on the group’s Notifications page.`
+        : 'Created.',
       url: notificationUrl(payload.group),
       config: { ...payload },
       partial: false,
@@ -228,6 +239,10 @@ export function useApply(): ApplyState {
                         label: item.label,
                         mechanism: 'notification',
                         condition: write.notification.condition,
+                        // Where it was written, so a later read knows which collection to
+                        // reconcile it against rather than judging it missing from the
+                        // group-level list.
+                        pack: write.pack,
                       },
               },
               controller.signal,

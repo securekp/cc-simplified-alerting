@@ -8,7 +8,7 @@ import { HeaderBar } from './components/HeaderBar.tsx';
 import { useDiscovery } from './hooks/useDiscovery.ts';
 import { useUrlFilters } from './hooks/useUrlFilters.ts';
 import { isCovered, matchesFilters, summarise } from './lib/filters.ts';
-import { buildRows, describeSelection } from './lib/rows.ts';
+import { buildRows, describeSelection, packKey } from './lib/rows.ts';
 import type { AttributedAlert, Feed } from './lib/types.ts';
 
 export default function App() {
@@ -37,9 +37,15 @@ export default function App() {
     [discovery.feeds, discovery.coverage, filters],
   );
 
+  // Pack ids are only unique inside a group, so the lookup is keyed on both.
+  const packNames = useMemo(
+    () => new Map(discovery.packs.map((pack) => [packKey(pack.group, pack.id), pack.name])),
+    [discovery.packs],
+  );
+
   const rows = useMemo(
-    () => buildRows(visibleFeeds, discovery.coverage),
-    [visibleFeeds, discovery.coverage],
+    () => buildRows(visibleFeeds, discovery.coverage, packNames),
+    [visibleFeeds, discovery.coverage, packNames],
   );
 
   const summary = useMemo(

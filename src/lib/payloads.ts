@@ -30,8 +30,18 @@ export function sanitizeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
+/**
+ * The id for a per-feed Notification.
+ *
+ * The Pack segment is appended only for a feed inside a Pack, so every id this app has already
+ * created keeps its exact spelling — the registry is keyed on these strings, and re-spelling them
+ * would make every existing alert read as unmanaged. It has to be there for Pack feeds, though:
+ * a Pack and its group can each hold a Source called `palo_traffic`, and one id for both would
+ * make the second write an edit of the first.
+ */
 export function alertId(feed: Feed): string {
-  return `${ALERT_ID_PREFIX}-${sanitizeIdPart(feed.group)}-${sanitizeIdPart(feed.id)}`.slice(0, 100);
+  const scope = feed.pack ? `${sanitizeIdPart(feed.group)}-${sanitizeIdPart(feed.pack)}` : sanitizeIdPart(feed.group);
+  return `${ALERT_ID_PREFIX}-${scope}-${sanitizeIdPart(feed.id)}`.slice(0, 100);
 }
 
 /**

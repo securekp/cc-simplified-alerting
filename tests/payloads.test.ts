@@ -38,6 +38,21 @@ describe('alertId', () => {
     const long = makeFeed({ id: 'x'.repeat(200), type: 'syslog' });
     assert.ok(alertId(long).length <= 100);
   });
+
+  it('names the Pack, so a Pack feed and a group feed of one name are two alerts', () => {
+    // Without the segment the second write would be an edit of the first, and one of the two
+    // feeds would end up watched by an alert scoped to the other.
+    const inPack = makeFeed({ id: 'palo_traffic', type: 'datagen', pack: 'cribl-palo-alto-networks' });
+    const atGroup = makeFeed({ id: 'palo_traffic', type: 'datagen' });
+    assert.notEqual(alertId(inPack), alertId(atGroup));
+    assert.equal(alertId(inPack), 'csa-default-cribl-palo-alto-networks-palo_traffic');
+  });
+
+  it('spells a group-level id exactly as it always has', () => {
+    // The KV registry is keyed on these strings. Re-spelling one would make every alert this
+    // app has already created read as unmanaged.
+    assert.equal(alertId(dest), 'csa-default-out_splunk');
+  });
 });
 
 describe('isAppAlertId', () => {

@@ -34,6 +34,25 @@ export interface RawNotification {
   conf?: Record<string, unknown>;
 }
 
+/**
+ * A Notification plus the collection it was read out of.
+ *
+ * The scope is not on the object and cannot be: a Notification carries a bare `conf.name`, no
+ * type, no direction and nothing naming a Pack. So "which feed does this watch?" is only
+ * answerable when the reader remembers where it found the alert, and pairing the two here keeps
+ * that from being a field stamped onto API data that Cribl never returned.
+ */
+export interface ScopedNotification {
+  raw: RawNotification;
+  /** The Pack it lives inside, or `null` for a group-level alert. */
+  pack: string | null;
+}
+
+/** Wrap a group-level read. */
+export function groupScoped(raw: readonly RawNotification[]): ScopedNotification[] {
+  return raw.map((item) => ({ raw: item, pack: null }));
+}
+
 export interface AttributionOutcome {
   attributed: AttributedAlert[];
   unattributed: UnattributedAlert[];
@@ -197,12 +216,17 @@ export function indexRegistry(records: readonly ManagedRecord[]): Map<string, Ma
  * comes from the condition's category, and scope from the Notification's `group`.
  * When `group` is absent we only attribute if exactly one group has that feed.
  *
+ * A Pack alert is matched only against that Pack's feeds, and a group alert only against the
+ * group's own — the scope is part of the identity, not a hint. Without it a Pack Source and a
+ * group Source sharing an id would make both alerts ambiguous, and this function's own rule
+ * (never guess) would drop coverage the deployment really has.
+ *
  * `registryReadable` says whether the registry read succeeded, as opposed to returning
  * nothing. Without it an unreadable registry looks identical to an empty one and every
  * alert gets labelled as not created here.
  */
 export function attributeNotifications(
-  notifications: readonly RawNotification[],
+  notifications: readonly ScopedNotification[],
   feeds: readonly Feed[],
   conditions: ReadonlyMap<string, NotificationCondition>,
   registry: ReadonlyMap<string, ManagedRecord>,
@@ -212,7 +236,7 @@ export function attributeNotifications(
   const unattributed: UnattributedAlert[] = [];
   const bridges = new Map<string, RawNotification>();
 
-  for (const raw of notifications) {
+  for (const { raw, pack } of notifications) {
     const id = typeof raw.id === 'string' ? raw.id : null;
     if (!id) continue;
 
@@ -248,16 +272,23 @@ export function attributeNotifications(
     }
 
     const group = typeof raw.group === 'string' && raw.group ? raw.group : null;
+    const scope = pack ? ` in Pack ${pack}` : '';
     const candidates = feeds.filter(
-      (feed) => feed.direction === direction && feed.id === feedId && (group === null || feed.group === group),
+      (feed) =>
+        feed.direction === direction &&
+        feed.id === feedId &&
+        // The scope has to match exactly, in both directions: a Pack alert never watches a
+        // group-level feed, and a group alert never reaches inside a Pack.
+        (feed.pack ?? null) === pack &&
+        (group === null || feed.group === group),
     );
     if (candidates.length !== 1) {
       unattributed.push({
         id,
         reason:
           candidates.length === 0
-            ? `no enabled ${direction} named "${feedId}"${group ? ` in group ${group}` : ''}`
-            : `"${feedId}" is a ${direction} in ${candidates.length} groups and the alert names none`,
+            ? `no enabled ${direction} named "${feedId}"${scope}${group ? ` in group ${group}` : ''}`
+            : `"${feedId}" is a ${direction}${scope} in ${candidates.length} groups and the alert names none`,
       });
       continue;
     }
@@ -274,6 +305,7 @@ export function attributeNotifications(
       disabled: raw.disabled === true,
       rowId: candidates[0].rowId,
       group: group ?? candidates[0].group,
+      pack,
       // The object as stored, so the configuration view shows what is really there.
       config: { ...(raw as Record<string, unknown>) },
     });
@@ -308,7 +340,9 @@ export function attributeMonitors(
   const unattributed: UnattributedAlert[] = [];
   const byTag = new Map<string, Feed[]>();
   for (const feed of feeds) {
-    const tag = `${feed.type}:${feed.id}`;
+    // `metricKey`, not a locally recomposed `type:id`: a Pack feed's tag is `type:pack.id`, and a
+    // monitor Cribl's own UI scoped to one is real coverage that this app only reads.
+    const tag = feed.metricKey;
     const existing = byTag.get(tag);
     if (existing) existing.push(feed);
     else byTag.set(tag, [feed]);
@@ -365,6 +399,7 @@ export function attributeMonitors(
         disabled,
         rowId: feed.rowId,
         group: feed.group,
+        pack: feed.pack,
         hostGroup,
         routed: bridge !== undefined && bridge.disabled !== true,
         // The routing half, as stored. Which route it takes — a policy, or named targets — is a

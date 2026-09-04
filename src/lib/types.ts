@@ -32,14 +32,33 @@ export interface WorkerGroup {
 
 /** One enabled Source or Destination in one worker group. */
 export interface Feed {
-  /** Stable row key: direction + group + id. Feed ids are only unique per group. */
+  /**
+   * Stable row key: direction + group + pack + id.
+   *
+   * The pack segment is load-bearing, not decoration: a feed id is only unique inside its own
+   * scope, so a Pack and its group can both hold a Source called `palo_traffic` and a key
+   * without the pack would collapse the two rows into one.
+   */
   rowId: string;
   id: string;
   type: string;
   group: string;
   direction: Direction;
   /**
-   * The metric-store dimension value for this feed: `` `${type}:${id}` ``.
+   * The Pack this feed lives inside, or `null` for a group-level feed.
+   *
+   * A Pack feed has **no row** in `/m/:gid/system/{inputs,outputs}` — it is only reachable at
+   * `/m/:gid/p/:pack/system/…` — which is why an earlier build showed a table that read as
+   * complete while a Pack carrying real traffic was entirely absent from it.
+   *
+   * It changes *where* an alert is written, never which alert is available: a Notification goes to
+   * the Pack's own collection and both ids carry a Pack segment, but the mechanism is the admin's
+   * choice exactly as it is for a group feed. See `mechanismFor` in `lib/plan.ts`.
+   */
+  pack: string | null;
+  /**
+   * The metric-store dimension value for this feed: `` `${type}:${id}` ``, or
+   * `` `${type}:${pack}.${id}` `` for a feed inside a Pack.
    * Always constructed from the config object and compared for exact equality —
    * never produced by splitting a dimension value apart, because ids can contain
    * colons of their own (`syslog:in_syslog:udp` is type `syslog`, id `in_syslog`).
@@ -96,6 +115,15 @@ export interface AttributedAlert {
   rowId: string;
   /** Worker group the alert is scoped to, for the deep link. */
   group: string | null;
+  /**
+   * The Pack the alert lives inside, or `null` for a group-level one.
+   *
+   * Read from *where the alert was found*, not from anything on the object: a Notification
+   * carries a bare `conf.name` and nothing that names a Pack, so the only trustworthy answer is
+   * which collection returned it. It is on the alert because the configuration view has to say
+   * where the admin will find it — a Pack notification is not on the group's Notifications page.
+   */
+  pack?: string | null;
   /**
    * Monitors only: the group whose `/m/{gid}/alert/monitors` collection holds this object.
    *

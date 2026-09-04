@@ -5,6 +5,12 @@
  * already carry `status.health`, so one call per group per direction fills the whole
  * coverage table. The `/system/status/*` endpoints are a lazy enhancement, fetched
  * only when a row is expanded for the per-Worker-Process breakdown.
+ *
+ * There are **two scopes**, and neither is reachable from the other. A group's own feeds live
+ * under `/m/:gid/system/…`; a Pack's live under `/m/:gid/p/:pack/system/…` and appear in the
+ * group-level response not at all. That is why a `FeedScope` is threaded through every call
+ * here rather than a bare group id: an app that only knew about groups would render a table
+ * that looks complete while a Pack carrying real traffic is missing from it.
  */
 
 import { fetchAllUnique } from './client.ts';
@@ -15,21 +21,43 @@ function idOf(item: { id?: unknown }): string | null {
   return typeof item.id === 'string' && item.id ? item.id : null;
 }
 
-function discoveryPath(group: string, direction: Direction): string {
-  return `/m/${encodeURIComponent(group)}/system/${direction === 'source' ? 'inputs' : 'outputs'}`;
+/**
+ * Where a set of feeds is read from: a worker group, optionally narrowed to one Pack inside it.
+ *
+ * Packs are group-scoped objects, so the Pack prefix is always *inside* the group prefix — the
+ * root-level `/p/{pack}/…` paths `openapi.json` documents are the single-instance form and are
+ * the same trap as `/system/inputs` and `/alert/monitors`.
+ */
+export interface FeedScope {
+  group: string;
+  pack: string | null;
 }
 
-function statusPath(group: string, direction: Direction): string {
-  return `/m/${encodeURIComponent(group)}/system/status/${direction === 'source' ? 'inputs' : 'outputs'}`;
+export function groupScope(group: string): FeedScope {
+  return { group, pack: null };
+}
+
+/** `/m/{group}` or `/m/{group}/p/{pack}`. */
+export function scopePrefix(scope: FeedScope): string {
+  const base = `/m/${encodeURIComponent(scope.group)}`;
+  return scope.pack ? `${base}/p/${encodeURIComponent(scope.pack)}` : base;
+}
+
+function discoveryPath(scope: FeedScope, direction: Direction): string {
+  return `${scopePrefix(scope)}/system/${direction === 'source' ? 'inputs' : 'outputs'}`;
+}
+
+function statusPath(scope: FeedScope, direction: Direction): string {
+  return `${scopePrefix(scope)}/system/status/${direction === 'source' ? 'inputs' : 'outputs'}`;
 }
 
 export async function fetchFeeds(
-  group: string,
+  scope: FeedScope,
   direction: Direction,
   signal?: AbortSignal,
 ): Promise<Feed[]> {
-  const raw = await fetchAllUnique<RawFeed>(discoveryPath(group, direction), idOf, { signal });
-  return toFeeds(raw, group, direction);
+  const raw = await fetchAllUnique<RawFeed>(discoveryPath(scope, direction), idOf, { signal });
+  return toFeeds(raw, scope.group, direction, scope.pack);
 }
 
 /** Per-Worker-Process health breakdown, shown when a health cell is expanded. */
@@ -72,17 +100,17 @@ function readError(raw: unknown): string | null {
 }
 
 /**
- * Fetch the status detail for one direction of one group, keyed by feed id.
+ * Fetch the status detail for one direction of one scope, keyed by feed id.
  *
  * Called on expand only. A failure here degrades that one cell to "unavailable" —
  * the base health column comes from discovery and is unaffected.
  */
 export async function fetchHealthDetail(
-  group: string,
+  scope: FeedScope,
   direction: Direction,
   signal?: AbortSignal,
 ): Promise<Map<string, HealthDetail>> {
-  const raw = await fetchAllUnique<RawStatus>(statusPath(group, direction), idOf, { signal });
+  const raw = await fetchAllUnique<RawStatus>(statusPath(scope, direction), idOf, { signal });
   const byId = new Map<string, HealthDetail>();
   for (const entry of raw) {
     const id = idOf(entry);

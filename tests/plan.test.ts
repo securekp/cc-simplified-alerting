@@ -16,6 +16,7 @@ import {
   countPlan,
   DEFAULT_SETTINGS,
   indexFeedIdentities,
+  mechanismFor,
   type PlanContext,
   type PlannedAlert,
   type TemplateSettings,
@@ -373,6 +374,43 @@ describe('indexFeedIdentities', () => {
     ]);
   });
 
+  it('keys a Pack feed under a Pack-aware segment, so it neither invents nor hides a collision', () => {
+    // A Pack feed does get a monitor now, so it has to be in this index — but under the same
+    // segment its monitor id uses. Keying on the bare id would report the group feed of that name
+    // as a clash and block a real monitor over one that was never in danger.
+    const inPack = makeFeed({ id: 'palo_traffic', type: 'datagen', pack: 'cribl-palo-alto-networks' });
+    const atGroup = makeFeed({ id: 'palo_traffic', type: 'datagen' });
+    const index = indexFeedIdentities([inPack, atGroup]);
+    assert.deepEqual(index.get('palo_traffic'), [
+      { direction: 'source', tag: 'datagen:palo_traffic', groups: ['default'] },
+    ]);
+    assert.deepEqual(index.get('cribl-palo-alto-networks_palo_traffic'), [
+      {
+        direction: 'source',
+        tag: 'datagen:cribl-palo-alto-networks.palo_traffic',
+        groups: ['default'],
+      },
+    ]);
+
+    // Neither blocks the other: two buckets, two monitor ids.
+    for (const feed of [inPack, atGroup]) {
+      const plan = buildPlan([feed], settings(asMonitor('source')), context({ feedIdentities: index }));
+      assert.equal(plan[0].blocked, undefined, `expected ${feed.rowId} not to be blocked`);
+    }
+  });
+
+  it('still catches two Packs whose feeds would produce one monitor id', () => {
+    // The reason the Pack has to be *in* the id rather than merely beside it: without it these two
+    // are one object, and `upsertMonitor`'s PATCH recovery would point the first Pack's monitor at
+    // the second Pack's feed.
+    const first = makeFeed({ id: 'traffic', type: 'datagen', pack: 'pack.one' });
+    const second = makeFeed({ id: 'one_traffic', type: 'datagen', pack: 'pack' });
+    const index = indexFeedIdentities([first, second]);
+    assert.equal(index.get('pack_one_traffic')?.length, 2);
+    const plan = buildPlan([first], settings(asMonitor('source')), context({ feedIdentities: index }));
+    assert.match(plan[0].blocked ?? '', /source_data_in_rate_pack_one_traffic/);
+  });
+
   it('keeps two feeds of the same name but different types apart', () => {
     // Same id segment, different tags — which is exactly the monitor-id collision `plan.ts`
     // refuses, so the index has to keep them as two identities rather than merging them.
@@ -424,6 +462,86 @@ describe('a monitor id that two different feeds would share', () => {
     const shared = indexFeedIdentities([source, sameName]);
     const plan = buildPlan([source], settings(), context({ feedIdentities: shared }));
     assert.equal(plan[0].blocked, undefined);
+  });
+});
+
+describe('a feed inside a Pack', () => {
+  /*
+   * Both mechanisms, chosen by the admin exactly as for a group feed. The Pack-qualified metric tag
+   * a monitor pins is verified live (2026-09-03): splitting the throughput metrics by `input` and
+   * `output` returns `datagen:cribl-palo-alto-networks.palo_traffic` and no bare-id series at all,
+   * and `namespace` is not a dimension, so the shipped `{namespace=""}` matcher treats both scopes
+   * alike. Scope changes the collection and the ids, never the option set.
+   */
+  const packSource = makeFeed({ id: 'palo_traffic', type: 'datagen', pack: 'cribl-palo-alto-networks' });
+
+  it('gets whichever mechanism the direction is set to, exactly like a group feed', () => {
+    assert.equal(mechanismFor(packSource, settings()), 'notification');
+    assert.equal(mechanismFor(packSource, settings(asMonitor('source'))), 'monitor');
+    assert.equal(
+      mechanismFor(packSource, settings(asMonitor('source'))),
+      mechanismFor(source, settings(asMonitor('source'))),
+      'scope must not change the mechanism',
+    );
+  });
+
+  it('carries the Pack on the write, since that is the only thing that picks the collection', () => {
+    const plan = buildPlan([packSource], settings(), context());
+    assert.equal(plan[0].mechanism, 'notification');
+    assert.ok(plan[0].write && plan[0].write.kind === 'notification');
+    assert.equal(plan[0].write.pack, 'cribl-palo-alto-networks');
+    assert.equal(plan[0].write.group, 'default');
+    // The payload itself is byte-identical to a group-level one; the path is the difference.
+    assert.equal(plan[0].write.notification.conf.name, 'palo_traffic');
+    assert.match(plan[0].label, /inside Pack "cribl-palo-alto-networks"/);
+  });
+
+  it('pins the monitor to the Pack-qualified tag, which is the only form the metrics carry', () => {
+    const plan = buildPlan([packSource], settings(asMonitor('source')), context());
+    assert.equal(plan[0].blocked, undefined);
+    assert.ok(plan[0].write && plan[0].write.kind === 'monitor');
+    assert.deepEqual(plan[0].write.monitor.rules[0].includedTags, {
+      input: ['datagen:cribl-palo-alto-networks.palo_traffic'],
+    });
+  });
+
+  it('puts the Pack in the monitor id, so two Packs are two objects', () => {
+    const plan = buildPlan([packSource], settings(asMonitor('source')), context());
+    assert.ok(plan[0].write && plan[0].write.kind === 'monitor');
+    assert.equal(
+      plan[0].write.monitor.id,
+      'source_data_in_rate_cribl-palo-alto-networks_palo_traffic',
+    );
+    // A group feed's id is untouched, so every monitor already written keeps resolving.
+    const atGroup = buildPlan([source], settings(asMonitor('source')), context());
+    assert.ok(atGroup[0].write && atGroup[0].write.kind === 'monitor');
+    assert.equal(atGroup[0].write.monitor.id, 'source_data_in_rate_in_syslog');
+  });
+
+  it('is still gated on the Notification write being permitted', () => {
+    const plan = buildPlan([packSource], settings(), context({ alerting: blocked('denied') }));
+    assert.equal(plan[0].blocked, 'denied');
+  });
+
+  it('is gated on the monitor capability once it is asking for a monitor', () => {
+    // The flip side of getting the choice: a Pack feed set to `monitor` now fails with the monitor
+    // mechanism instead of quietly falling back to a Notification the admin did not pick.
+    const plan = buildPlan(
+      [packSource],
+      settings(asMonitor('source')),
+      context({ monitors: blocked('no monitor collection answered'), monitorHost: null }),
+    );
+    assert.match(plan[0].blocked ?? '', /no monitor collection answered/);
+    assert.equal(plan[0].write, null);
+
+    // Set to `notification`, the same feed is unaffected by that denial.
+    const asNotification = buildPlan(
+      [packSource],
+      settings(),
+      context({ monitors: blocked('no monitor collection answered'), monitorHost: null }),
+    );
+    assert.equal(asNotification[0].blocked, undefined);
+    assert.ok(asNotification[0].write);
   });
 });
 

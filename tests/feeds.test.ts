@@ -7,9 +7,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   feedMetricKey,
+  feedRowId,
   isUnhealthy,
   normalizeHealth,
+  packHasFeeds,
   toFeeds,
+  toPacks,
   toStreamGroups,
 } from '../src/lib/feeds.ts';
 
@@ -54,6 +57,87 @@ describe('feedMetricKey', () => {
     // value on every colon would produce the wrong key and an uncovered-looking feed.
     assert.equal(feedMetricKey('syslog', 'in_syslog:udp'), 'syslog:in_syslog:udp');
     assert.equal(feedMetricKey('cribl_lake', 'palo_traffic'), 'cribl_lake:palo_traffic');
+  });
+
+  it('qualifies a Pack feed with its Pack, which is how the metric store names it', () => {
+    // Verified live: `datagen:cribl-palo-alto-networks.palo_traffic` carried 33 MB in an hour
+    // while no `datagen:palo_traffic` series existed at all. A bare key here would make every
+    // Pack feed read as producing nothing.
+    assert.equal(
+      feedMetricKey('datagen', 'palo_traffic', 'cribl-palo-alto-networks'),
+      'datagen:cribl-palo-alto-networks.palo_traffic',
+    );
+  });
+});
+
+describe('feedRowId', () => {
+  it('keeps a Pack feed and a group feed of the same name apart', () => {
+    // Both are real rows with their own coverage answer, so one key for the two would collapse
+    // them and report the group feed's alert as watching the Pack's.
+    assert.notEqual(
+      feedRowId('source', 'default', 'palo_traffic'),
+      feedRowId('source', 'default', 'palo_traffic', 'cribl-palo-alto-networks'),
+    );
+  });
+
+  it('spells a group-level row the same way it always has, with an empty pack segment', () => {
+    assert.equal(feedRowId('source', 'default', 'in_x'), 'source|default||in_x');
+  });
+});
+
+describe('toPacks', () => {
+  const raw = [
+    { id: 'cribl-palo-alto-networks', displayName: 'Palo Alto Networks', inputs: 2, outputs: 0 },
+    { id: 'anonymous', displayName: 'Off', isDisabled: true, inputs: 4 },
+    { id: 'bare' },
+  ];
+
+  it('drops a disabled Pack and falls back to the id when there is no display name', () => {
+    const packs = toPacks(raw, 'default');
+    assert.deepEqual(
+      packs.map((pack) => pack.id),
+      ['bare', 'cribl-palo-alto-networks'],
+      'sorted by id, so the sections read the same on every render',
+    );
+    assert.equal(packs[0].name, 'bare');
+    assert.equal(packs[1].name, 'Palo Alto Networks');
+    assert.equal(packs[0].group, 'default');
+  });
+
+  it('reads an absent count as null rather than zero', () => {
+    // Zero is permission to skip a request. "Did not say" is not, and reading it as zero would
+    // hide every feed in a Pack that simply omitted the field — the blind spot this exists to fix.
+    const [bare, palo] = toPacks(raw, 'default');
+    assert.equal(bare.inputs, null);
+    assert.equal(bare.outputs, null);
+    assert.equal(palo.inputs, 2);
+    assert.equal(palo.outputs, 0);
+  });
+
+  it('skips entries with no usable id', () => {
+    assert.deepEqual(toPacks([{ displayName: 'nameless' }, { id: '' }], 'default'), []);
+  });
+});
+
+describe('packHasFeeds', () => {
+  const pack = (inputs: number | null, outputs: number | null) => ({
+    id: 'p',
+    group: 'default',
+    name: 'p',
+    inputs,
+    outputs,
+  });
+
+  it('says no only when the Pack reported a count and the count was zero', () => {
+    assert.equal(packHasFeeds(pack(0, 3), 'source'), false);
+    assert.equal(packHasFeeds(pack(0, 3), 'destination'), true);
+    assert.equal(packHasFeeds(pack(2, 0), 'source'), true);
+    assert.equal(packHasFeeds(pack(2, 0), 'destination'), false);
+  });
+
+  it('asks anyway when the count is absent', () => {
+    assert.equal(packHasFeeds(pack(null, null), 'source'), true);
+    assert.equal(packHasFeeds(pack(null, null), 'destination'), true);
   });
 });
 
@@ -128,5 +212,57 @@ describe('toFeeds', () => {
     const [first] = toFeeds([{ id: 'in_x', type: 'tcp' }], 'groupA', 'source');
     const [second] = toFeeds([{ id: 'in_x', type: 'tcp' }], 'groupB', 'source');
     assert.notEqual(first.rowId, second.rowId);
+  });
+
+  it('stamps the Pack from the scope it was read in, because the entries do not carry it', () => {
+    // The Pack-level call returns feeds keyed on their bare id exactly as the group-level call
+    // does, so nothing in the response distinguishes the two. Only the caller knows.
+    const [feed] = toFeeds(
+      [{ id: 'palo_traffic', type: 'datagen', status: { health: 'Green' } }],
+      'default',
+      'source',
+      'cribl-palo-alto-networks',
+    );
+    assert.equal(feed.pack, 'cribl-palo-alto-networks');
+    assert.equal(feed.metricKey, 'datagen:cribl-palo-alto-networks.palo_traffic');
+    const [groupLevel] = toFeeds([{ id: 'palo_traffic', type: 'datagen' }], 'default', 'source');
+    assert.equal(groupLevel.pack, null);
+    assert.notEqual(feed.rowId, groupLevel.rowId);
+  });
+
+  it('drops a Pack’s default and devnull Destinations, whatever they are called', () => {
+    // Every Pack ships both, and neither can answer "did this feed stop delivering data?" —
+    // devnull discards by design and default forwards elsewhere. Matched on type, so a second
+    // DevNull under a custom id goes too.
+    const feeds = toFeeds(
+      [
+        { id: 'default', type: 'default', status: {} },
+        { id: 'devnull', type: 'devnull', status: { health: 'Green' } },
+        { id: 'my_bit_bucket', type: 'devnull', status: { health: 'Green' } },
+        { id: 'out_lake', type: 'cribl_lake', status: { health: 'Green' } },
+      ],
+      'default',
+      'destination',
+      'cribl-palo-alto-networks',
+    );
+    assert.deepEqual(
+      feeds.map((feed) => feed.id),
+      ['out_lake'],
+    );
+  });
+
+  it('keeps the group-level default and devnull, because there is one of each, not one per Pack', () => {
+    const feeds = toFeeds(
+      [
+        { id: 'default', type: 'default', status: {} },
+        { id: 'devnull', type: 'devnull', status: { health: 'Green' } },
+      ],
+      'default',
+      'destination',
+    );
+    assert.deepEqual(
+      feeds.map((feed) => feed.id),
+      ['default', 'devnull'],
+    );
   });
 });

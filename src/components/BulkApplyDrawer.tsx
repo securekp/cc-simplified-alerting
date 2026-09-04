@@ -138,6 +138,26 @@ export function BulkApplyDrawer(props: BulkApplyDrawerProps) {
     return [...set];
   }, [feeds]);
 
+  /*
+   * How the selection splits by scope, per direction.
+   *
+   * The drawer needs this because scope decides the mechanism whatever the admin picks: a Pack
+   * feed is always a Notification inside its Pack (see `mechanismFor`). So a direction holding
+   * Pack feeds needs its condition form even when the mechanism selector says "monitor", and a
+   * direction holding *only* Pack feeds has no mechanism to choose at all.
+   */
+  const scopeCounts = useMemo(() => {
+    const counts: Record<Direction, { pack: number; group: number }> = {
+      source: { pack: 0, group: 0 },
+      destination: { pack: 0, group: 0 },
+    };
+    for (const feed of feeds) {
+      if (feed.pack) counts[feed.direction].pack++;
+      else counts[feed.direction].group++;
+    }
+    return counts;
+  }, [feeds]);
+
   const [mechanismBy, setMechanismBy] = useState<Record<Direction, Mechanism>>(
     DEFAULT_SETTINGS.mechanismBy,
   );
@@ -284,6 +304,9 @@ export function BulkApplyDrawer(props: BulkApplyDrawerProps) {
   const errorsBy = useMemo(() => {
     const result: Record<Direction, Record<string, string>> = { source: {}, destination: {} };
     for (const direction of directionsPresent) {
+      // Purely by mechanism. This used to validate a monitor direction's `conf` too, because a Pack
+      // feed on it was still written as a Notification; a Pack feed now follows the selection, so a
+      // condition nothing in this run uses must not be able to block it.
       if (mechanismBy[direction] !== 'notification') continue;
       const id = conditionBy[direction];
       const condition = id ? conditionsById.get(id) : undefined;
@@ -413,6 +436,7 @@ export function BulkApplyDrawer(props: BulkApplyDrawerProps) {
       {step === 'configure' ? (
         <ConfigureStep
           directionsPresent={directionsPresent}
+          scopeCounts={scopeCounts}
           capabilities={capabilities}
           conditionsByDirection={conditionsByDirection}
           conditionsById={conditionsById}
@@ -452,6 +476,8 @@ export function BulkApplyDrawer(props: BulkApplyDrawerProps) {
 
 interface ConfigureStepProps {
   directionsPresent: readonly Direction[];
+  /** How many selected feeds of each direction live inside a Pack, and how many do not. */
+  scopeCounts: Record<Direction, { pack: number; group: number }>;
   capabilities: DiscoveryCapabilities;
   conditionsByDirection: Record<Direction, NotificationCondition[]>;
   conditionsById: ReadonlyMap<string, NotificationCondition>;
@@ -480,6 +506,8 @@ interface ConfigureStepProps {
 function ConfigureStep(props: ConfigureStepProps) {
   const notificationsUsable = props.capabilities.alerting.available;
   const monitorsUsable = props.capabilities.monitors.available;
+  // Scope does not enter either of these any more. A Pack feed gets whichever mechanism its
+  // direction is set to, so the run writes monitors or notifications by the admin's choice alone.
   const usesMonitor = props.directionsPresent.some(
     (direction) => props.mechanismBy[direction] === 'monitor',
   );
@@ -515,14 +543,32 @@ function ConfigureStep(props: ConfigureStepProps) {
         const selectedId = props.conditionBy[direction];
         const condition = selectedId ? props.conditionsById.get(selectedId) : undefined;
         const mechanism = props.mechanismBy[direction];
+        const scope = props.scopeCounts[direction];
         const mechanisms: Mechanism[] = [
           ...(notificationsUsable ? (['notification'] as const) : []),
           ...(monitorsUsable ? (['monitor'] as const) : []),
         ];
+        // One mechanism, one form. Scope used to split this in two — a Pack feed was always a
+        // Notification — which put a monitor form and a condition form on screen at once and made
+        // the two scopes read as different features. They are not: the only thing a Pack changes is
+        // which collection the object is written to.
+        const showMonitorForm = mechanism === 'monitor';
+        const showConditionForm = mechanism === 'notification';
 
         return (
           <section className="drawer-section" key={direction}>
             <Text variant="body-md-semibold">{DIRECTION_LABEL[direction]}</Text>
+
+            {scope.pack > 0 ? (
+              <Text variant="body-sm-normal" color="subtle" as="p">
+                {scope.pack === 1
+                  ? `One of these lives inside a Pack and is alerted on the same way`
+                  : `${scope.pack} of these live inside a Pack and are alerted on the same way`}
+                {mechanism === 'notification'
+                  ? ', with the notification written into the Pack’s own collection rather than the group’s.'
+                  : ', with the monitor scoped to the Pack-qualified metric tag.'}
+              </Text>
+            ) : null}
 
             {mechanisms.length > 1 ? (
               <SelectField
@@ -542,13 +588,17 @@ function ConfigureStep(props: ConfigureStepProps) {
               />
             ) : null}
 
-            {mechanism === 'monitor' ? (
+            {showMonitorForm ? (
               <MonitorForm
                 templates={props.monitorTemplates[direction]}
                 settings={props.monitorBy[direction]}
                 onChange={(next) => props.setMonitorBy({ ...props.monitorBy, [direction]: next })}
               />
-            ) : available.length === 0 ? (
+            ) : null}
+
+            {/* Both forms can be on screen at once, and have to be: a direction set to `monitor`
+                that also holds Pack feeds is writing a monitor *and* a Notification. */}
+            {!showConditionForm ? null : available.length === 0 ? (
               <Alert
                 appearance="warning"
                 title={`No condition detects a ${direction} that stopped delivering`}

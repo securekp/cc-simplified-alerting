@@ -201,6 +201,21 @@ function NotificationBody({
             </Text>
           </dd>
         </div>
+        {/* Its own row, because the object does not carry it: the Pack is known from the
+            collection this alert was read out of, and it is where the admin has to go to edit it. */}
+        {alert.pack ? (
+          <div className="config-row">
+            <dt>
+              <Text variant="body-sm-semibold">Pack</Text>
+            </dt>
+            <dd>
+              <Text variant="body-sm-normal">{alert.pack}</Text>
+              <Text variant="body-xs-normal" color="subtle">
+                This alert lives inside the Pack, alongside the feed it watches.
+              </Text>
+            </dd>
+          </div>
+        ) : null}
         <div className="config-row">
           <dt>
             <Text variant="body-sm-semibold">Routing</Text>
@@ -249,8 +264,11 @@ function NotificationBody({
         <Text variant="body-xs-normal" color="subtle">
           This alert is listed on the Insights alerts page alongside Insights monitors — but it is a
           condition notification, so it has no chart and no edit screen of its own there. It is
-          edited under Notifications{alert.group ? ` in ${alert.group}` : ''}. This app only creates
-          alerts; it never edits one you are looking at here.
+          edited under Notifications{alert.group ? ` in ${alert.group}` : ''}
+          {alert.pack
+            ? `, from inside the Pack "${alert.pack}" — the link below goes to the group’s Notifications page, because no Pack-scoped one has been confirmed to exist`
+            : ''}
+          . This app only creates alerts; it never edits one you are looking at here.
         </Text>
         <div className="config-link-row">
           <ButtonLink
